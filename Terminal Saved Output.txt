@@ -1,0 +1,28 @@
+Last login: Wed Sep 30 15:38:59 on ttys001
+seniorsimplified@Chucks-MacBook-Air ~ %  cat << 'EOF' > ~/Documents/seniorscamshield-backend/.env PORT=3000 TWILIO_ACCOUNT_SID=YOUR_TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN=YOUR_TWILIO_AUTH_TOKEN TWILIO_TWIML_APP_SID=YOUR_TWILIO_TWIML_APP_SID SERVER_DOMAIN=renewal-rebound-strum.ngrok-free.dev EOF
+heredoc> open -e ~/Documents/seniorscamshield-backend/.env
+heredoc> SERVER_DOMAIN=renewal-rebound-strum.ngrok-free.dev
+heredoc> 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

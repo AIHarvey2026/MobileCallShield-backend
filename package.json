@@ -1,0 +1,17 @@
+{
+  "name": "seniorscamshield-backend",
+  "version": "1.0.0",
+  "description": "Backend service for SeniorScamShield PSTN gateway and AI monitoring",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "twilio": "^5.0.0",
+    "ws": "^8.16.0"
+  }
+}
