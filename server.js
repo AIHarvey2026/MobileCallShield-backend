@@ -26,19 +26,66 @@ app.get('/api/shield-number', (req, res) => {
   });
 });
 
+// =============================================================
+// TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
+// =============================================================
+
+const fs = require('fs');
+const path = require('path');
+
+// Local JSON file to store passphrases per caller phone number
+const PASSPHRASE_FILE = path.join(__dirname, 'passphrases.json');
+
+function loadPassphrases() {
+  try {
+    if (fs.existsSync(PASSPHRASE_FILE)) {
+      return JSON.parse(fs.readFileSync(PASSPHRASE_FILE, 'utf8'));
+    }
+  } catch (err) {
+    console.error('Error reading passphrases file:', err);
+  }
+  return {};
+}
+
+function savePassphrases(data) {
+  try {
+    fs.writeFileSync(PASSPHRASE_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error saving passphrases file:', err);
+  }
+}
+
 // -------------------------------------------------------------
-// 2. Telnyx Inbound Voice Webhook (TeXML)
+// 1. Initial Call Entry Point
 // -------------------------------------------------------------
-// Initial Call Entry Point
 app.post('/voice', (req, res) => {
-  console.log('[VOICE] Incoming call from:', req.body?.From || req.body?.from);
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
+  console.log('[VOICE] Incoming call from:', callerNumber);
+
+  const db = loadPassphrases();
+  const existingPassphrase = db[callerNumber];
 
   res.type('text/xml');
 
-  // action="/voice/process" routes the speech result to our processor route below
+  // FIRST-TIME CALLER: Prompt to set up a new passphrase
+  if (!existingPassphrase) {
+    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech dtmf" action="/voice/setup" method="POST" timeout="6" numDigits="4">
+        <Say voice="Polly.Joanna-Neural">
+            Welcome to Mobile Call Shield. It looks like this is your first time calling. Please speak or enter a 4-digit passphrase to secure your calls.
+        </Say>
+    </Gather>
+    <Say voice="Polly.Joanna-Neural">We did not receive any input. Goodbye.</Say>
+    <Hangup/>
+</Response>`;
+    return res.send(xmlResponse);
+  }
+
+  // RETURNING CALLER: Prompt for existing passphrase
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech dtmf" action="/voice/process" method="POST" timeout="5" numDigits="4">
+    <Gather input="speech dtmf" action="/voice/process" method="POST" timeout="6" numDigits="4">
         <Say voice="Polly.Joanna-Neural">
             Thank you for calling Mobile Call Shield. Please enter or speak your passphrase code now.
         </Say>
@@ -50,28 +97,82 @@ app.post('/voice', (req, res) => {
   res.send(xmlResponse);
 });
 
-// Process Speech/DTMF Input from Caller
-app.post('/voice/process', (req, res) => {
-  // Extract speech result or keypad DTMF digits
+// -------------------------------------------------------------
+// 2. Setup / Change Passphrase Route
+// -------------------------------------------------------------
+app.post('/voice/setup', (req, res) => {
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
   const speechResult = req.body?.SpeechResult || req.body?.Speech || '';
   const digits = req.body?.Digits || '';
-  const userPassphrase = (speechResult || digits).toLowerCase().trim();
+  const newPassphrase = (speechResult || digits).toLowerCase().trim();
 
-  console.log(`[VOICE] Received input: "${userPassphrase}"`);
+  console.log(`[VOICE SETUP] ${callerNumber} set new passphrase: "${newPassphrase}"`);
 
   res.type('text/xml');
 
-  // Check if input matches your expected passphrase (e.g., "apple" or digits)
-  if (userPassphrase.includes('apple') || userPassphrase === '1234') {
+  if (newPassphrase.length >= 2) {
+    const db = loadPassphrases();
+    db[callerNumber] = newPassphrase;
+    savePassphrases(db);
+
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">Passphrase verified. Connecting your call now.</Say>
-    <!-- Add <Dial> logic here to bridge the call to your primary mobile phone -->
+    <Say voice="Polly.Joanna-Neural">
+        Your passphrase has been successfully saved as ${newPassphrase}. Connecting your call now.
+    </Say>
 </Response>`;
     return res.send(xmlResponse);
   }
 
-  // If wrong or unverified
+  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">We could not understand your passphrase. Please try calling back.</Say>
+    <Hangup/>
+</Response>`;
+  res.send(xmlResponse);
+});
+
+// -------------------------------------------------------------
+// 3. Process & Verify Passphrase Route
+// -------------------------------------------------------------
+app.post('/voice/process', (req, res) => {
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
+  const speechResult = req.body?.SpeechResult || req.body?.Speech || '';
+  const digits = req.body?.Digits || '';
+  const userInput = (speechResult || digits).toLowerCase().trim();
+
+  console.log(`[VOICE VERIFY] ${callerNumber} input: "${userInput}"`);
+
+  const db = loadPassphrases();
+  const savedPassphrase = db[callerNumber] || 'blue monkey';
+
+  res.type('text/xml');
+
+  // Request to CHANGE passphrase
+  if (userInput.includes('change') || userInput === '*') {
+    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech dtmf" action="/voice/setup" method="POST" timeout="6" numDigits="4">
+        <Say voice="Polly.Joanna-Neural">
+            Please speak or enter your new passphrase now.
+        </Say>
+    </Gather>
+    <Say voice="Polly.Joanna-Neural">No input received. Goodbye.</Say>
+    <Hangup/>
+</Response>`;
+    return res.send(xmlResponse);
+  }
+
+  // Verification SUCCESS
+  if (userInput.includes(savedPassphrase) || userInput === savedPassphrase) {
+    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Passphrase verified. Connecting your call now.</Say>
+</Response>`;
+    return res.send(xmlResponse);
+  }
+
+  // Verification FAILURE
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Invalid passphrase. Goodbye.</Say>
