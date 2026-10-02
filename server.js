@@ -116,9 +116,8 @@ app.post('/voice/setup', (req, res) => {
 
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">
-        Your 4-digit code has been saved. Connecting your call now.
-    </Say>
+    <Say voice="Polly.Joanna-Neural">Your code has been saved. Connecting your call now.</Say>
+    <Dial timeout="20" callerId="${callerNumber}">+18324254469</Dial>
 </Response>`;
     return res.send(xmlResponse);
   }
@@ -151,6 +150,7 @@ app.post('/voice/process', (req, res) => {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
+    <Dial timeout="20" callerId="${callerNumber}">+18324254469</Dial>
 </Response>`;
     return res.send(xmlResponse);
   }
@@ -164,7 +164,6 @@ app.post('/voice/process', (req, res) => {
 
   res.send(xmlResponse);
 });
-
 // -------------------------------------------------------------
 // 3. Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
