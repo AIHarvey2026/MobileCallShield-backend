@@ -67,30 +67,30 @@ app.post('/voice', (req, res) => {
 
   res.type('text/xml');
 
-  // FIRST-TIME CALLER: Prompt to set up a new passphrase
+  // FIRST-TIME CALLER: Prompt for 4-digit PIN
   if (!existingPassphrase) {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech dtmf" action="/voice/setup" method="POST" timeout="6" numDigits="4">
+    <Gather input="dtmf" action="/voice/setup" method="POST" timeout="3" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
-            Welcome to Mobile Call Shield. It looks like this is your first time calling. Please speak or enter a 4-digit passphrase to secure your calls.
+            Welcome to Mobile Call Shield. Please enter a 4-digit code using your keypad, followed by the pound key.
         </Say>
     </Gather>
-    <Say voice="Polly.Joanna-Neural">We did not receive any input. Goodbye.</Say>
+    <Say voice="Polly.Joanna-Neural">No code received. Goodbye.</Say>
     <Hangup/>
 </Response>`;
     return res.send(xmlResponse);
   }
 
-  // RETURNING CALLER: Prompt for existing passphrase
+  // RETURNING CALLER: Prompt for existing 4-digit PIN
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech dtmf" action="/voice/process" method="POST" timeout="6" numDigits="4">
+    <Gather input="dtmf" action="/voice/process" method="POST" timeout="3" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
-            Thank you for calling Mobile Call Shield. Please enter or speak your passphrase code now.
+            Thank you for calling Mobile Call Shield. Please enter your 4-digit code now.
         </Say>
     </Gather>
-    <Say voice="Polly.Joanna-Neural">We did not receive any input. Goodbye.</Say>
+    <Say voice="Polly.Joanna-Neural">No code received. Goodbye.</Say>
     <Hangup/>
 </Response>`;
 
@@ -98,27 +98,26 @@ app.post('/voice', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 2. Setup / Change Passphrase Route
+// 2. Setup / Change Passphrase (4-Digit PIN)
 // -------------------------------------------------------------
 app.post('/voice/setup', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const speechResult = req.body?.SpeechResult || req.body?.Speech || '';
   const digits = req.body?.Digits || '';
-  const newPassphrase = (speechResult || digits).toLowerCase().trim();
+  const newPin = digits.trim();
 
-  console.log(`[VOICE SETUP] ${callerNumber} set new passphrase: "${newPassphrase}"`);
+  console.log(`[VOICE SETUP] ${callerNumber} set PIN: "${newPin}"`);
 
   res.type('text/xml');
 
-  if (newPassphrase.length >= 2) {
+  if (newPin.length === 4) {
     const db = loadPassphrases();
-    db[callerNumber] = newPassphrase;
+    db[callerNumber] = newPin;
     savePassphrases(db);
 
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">
-        Your passphrase has been successfully saved as ${newPassphrase}. Connecting your call now.
+        Your 4-digit code has been saved. Connecting your call now.
     </Say>
 </Response>`;
     return res.send(xmlResponse);
@@ -126,48 +125,32 @@ app.post('/voice/setup', (req, res) => {
 
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">We could not understand your passphrase. Please try calling back.</Say>
+    <Say voice="Polly.Joanna-Neural">Please enter a valid 4-digit code. Goodbye.</Say>
     <Hangup/>
 </Response>`;
   res.send(xmlResponse);
 });
 
 // -------------------------------------------------------------
-// 3. Process & Verify Passphrase Route
+// 3. Process & Verify PIN
 // -------------------------------------------------------------
 app.post('/voice/process', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const speechResult = req.body?.SpeechResult || req.body?.Speech || '';
   const digits = req.body?.Digits || '';
-  const userInput = (speechResult || digits).toLowerCase().trim();
+  const userPin = digits.trim();
 
-  console.log(`[VOICE VERIFY] ${callerNumber} input: "${userInput}"`);
+  console.log(`[VOICE VERIFY] ${callerNumber} entered PIN: "${userPin}"`);
 
   const db = loadPassphrases();
-  const savedPassphrase = db[callerNumber] || 'blue monkey';
+  const savedPin = db[callerNumber];
 
   res.type('text/xml');
 
-  // Request to CHANGE passphrase
-  if (userInput.includes('change') || userInput === '*') {
+  // Verify 4-Digit PIN
+  if (userPin === savedPin) {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech dtmf" action="/voice/setup" method="POST" timeout="6" numDigits="4">
-        <Say voice="Polly.Joanna-Neural">
-            Please speak or enter your new passphrase now.
-        </Say>
-    </Gather>
-    <Say voice="Polly.Joanna-Neural">No input received. Goodbye.</Say>
-    <Hangup/>
-</Response>`;
-    return res.send(xmlResponse);
-  }
-
-  // Verification SUCCESS
-  if (userInput.includes(savedPassphrase) || userInput === savedPassphrase) {
-    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="Polly.Joanna-Neural">Passphrase verified. Connecting your call now.</Say>
+    <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
 </Response>`;
     return res.send(xmlResponse);
   }
@@ -175,7 +158,7 @@ app.post('/voice/process', (req, res) => {
   // Verification FAILURE
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">Invalid passphrase. Goodbye.</Say>
+    <Say voice="Polly.Joanna-Neural">Invalid code. Goodbye.</Say>
     <Hangup/>
 </Response>`;
 
