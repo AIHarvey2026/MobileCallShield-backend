@@ -29,17 +29,52 @@ app.get('/api/shield-number', (req, res) => {
 // -------------------------------------------------------------
 // 2. Telnyx Inbound Voice Webhook (TeXML)
 // -------------------------------------------------------------
+// Initial Call Entry Point
 app.post('/voice', (req, res) => {
   console.log('[VOICE] Incoming call from:', req.body?.From || req.body?.from);
 
   res.type('text/xml');
 
+  // action="/voice/process" routes the speech result to our processor route below
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech dtmf" timeout="5" numDigits="4">
-        <Say>Thank you for calling Mobile Call Shield. Please enter or speak your passphrase code now.</Say>
+    <Gather input="speech dtmf" action="/voice/process" method="POST" timeout="5" numDigits="4">
+        <Say voice="Polly.Joanna-Neural">
+            Thank you for calling Mobile Call Shield. Please enter or speak your passphrase code now.
+        </Say>
     </Gather>
-    <Say>We did not receive any input. Goodbye.</Say>
+    <Say voice="Polly.Joanna-Neural">We did not receive any input. Goodbye.</Say>
+    <Hangup/>
+</Response>`;
+
+  res.send(xmlResponse);
+});
+
+// Process Speech/DTMF Input from Caller
+app.post('/voice/process', (req, res) => {
+  // Extract speech result or keypad DTMF digits
+  const speechResult = req.body?.SpeechResult || req.body?.Speech || '';
+  const digits = req.body?.Digits || '';
+  const userPassphrase = (speechResult || digits).toLowerCase().trim();
+
+  console.log(`[VOICE] Received input: "${userPassphrase}"`);
+
+  res.type('text/xml');
+
+  // Check if input matches your expected passphrase (e.g., "apple" or digits)
+  if (userPassphrase.includes('apple') || userPassphrase === '1234') {
+    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Passphrase verified. Connecting your call now.</Say>
+    <!-- Add <Dial> logic here to bridge the call to your primary mobile phone -->
+</Response>`;
+    return res.send(xmlResponse);
+  }
+
+  // If wrong or unverified
+  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Invalid passphrase. Goodbye.</Say>
     <Hangup/>
 </Response>`;
 
