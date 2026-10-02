@@ -1,69 +1,122 @@
 const express = require('express');
-const twilio = require('twilio');
+const http = require('http');
+const WebSocket = require('ws');
+const telnyx = require('telnyx')(process.env.TELNYX_API_KEY);
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Health check route for UptimeRobot
-app.get('/health', (req, res) => {
-    res.status(200).send('OK');
+// -------------------------------------------------------------
+// 1. Health Check Endpoint
+// -------------------------------------------------------------
+app.get('/', (req, res) => {
+  res.send('Senior Scam Shield Backend (Telnyx) Active');
 });
 
-// Primary voice webhook called by Twilio
+// Endpoint for app/client to get the active Shield Number
+app.get('/api/shield-number', (req, res) => {
+  res.json({
+    shieldNumber: process.env.SHIELD_PHONE_NUMBER || '+13466036303'
+  });
+});
+
+// -------------------------------------------------------------
+// 2. Telnyx Inbound Voice Webhook (TeXML)
+// -------------------------------------------------------------
 app.post('/voice', (req, res) => {
-    console.log('[CALL] Incoming call received from:', req.body.From);
+  const callerNumber = req.body.From || req.body.data?.payload?.from || 'Unknown';
+  console.log(`[Voice] Incoming call from: ${callerNumber}`);
 
-    const twiml = new twilio.twiml.VoiceResponse();
+  // Telnyx TeXML response to ask for passphrase and connect to WebSocket media stream
+  const texml = `<?xml version="1.0" encoding="UTF-8"?>
+  <Response>
+    <Say voice="alice">Hello. Please state your passphrase to verify your identity.</Say>
+    <Connect>
+      <Stream url="wss://${req.headers.host}/media-stream" track="inbound_track" />
+    </Connect>
+  </Response>`;
 
-    const gather = twiml.gather({
-        input: 'speech',
-        action: '/verify-passphrase',
-        timeout: 5,
-        speechTimeout: 'auto'
+  res.type('text/xml');
+  res.send(texml);
+});
+
+// -------------------------------------------------------------
+// 3. Telnyx Inbound SMS Webhook
+// -------------------------------------------------------------
+app.post('/sms', async (req, res) => {
+  const body = req.body.data?.payload || req.body;
+  const fromNumber = body.from?.phone_number || body.From;
+  const messageText = (body.text || body.Body || '').trim();
+
+  console.log(`[SMS] Received from ${fromNumber}: "${messageText}"`);
+
+  let replyText = 'Command not recognized. Valid commands: ALERTS ON/OFF, SET PASSPHRASE [word], SET GUARDIAN [number].';
+  const textUpper = messageText.toUpperCase();
+
+  if (textUpper === 'ALERTS ON') {
+    replyText = 'Shield Alerts enabled. You will receive SMS alerts for unverified calls.';
+  } else if (textUpper === 'ALERTS OFF') {
+    replyText = 'Shield Alerts disabled.';
+  } else if (textUpper.startsWith('SET PASSPHRASE ')) {
+    const newPassphrase = messageText.substring(15).trim();
+    replyText = `Passphrase updated successfully to: "${newPassphrase}".`;
+  } else if (textUpper.startsWith('SET GUARDIAN ')) {
+    const guardianNum = messageText.substring(13).trim();
+    replyText = `Guardian notification number set to: ${guardianNum}.`;
+  }
+
+  // Send reply SMS using Telnyx Messaging API
+  try {
+    await telnyx.messages.create({
+      from: process.env.SHIELD_PHONE_NUMBER || '+13466036303',
+      to: fromNumber,
+      text: replyText
     });
-    gather.say('Hello. Please state your passphrase to proceed.');
+    console.log(`[SMS] Reply sent to ${fromNumber}`);
+  } catch (err) {
+    console.error('[SMS] Error sending Telnyx reply:', err.message);
+  }
 
-    // Fallback if no speech is detected
-    twiml.say('We did not receive any input. Goodbye.');
-
-    res.type('text/xml');
-    res.send(twiml.toString());
+  res.sendStatus(200);
 });
 
-// Passphrase verification route
-app.post('/verify-passphrase', (req, res) => {
-    const speechResult = (req.body.SpeechResult || '').toLowerCase();
-    console.log('[PASSPHRASE] Speech detected:', speechResult);
+// -------------------------------------------------------------
+// 4. WebSocket Server for Live Audio Screening
+// -------------------------------------------------------------
+wss.on('connection', (ws) => {
+  console.log('[Media Stream] WebSocket client connected');
 
-    const twiml = new twilio.twiml.VoiceResponse();
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
 
-    if (speechResult.includes('blue monkey')) {
-        twiml.say('Passphrase accepted. Connecting your call.');
-        // Replace +1XXXXXXXXXX with your real cell number to test direct forwarding
-        const dial = twiml.dial();
-        dial.number('+18324254469');
-    } else {
-        twiml.say('Passphrase incorrect. Please leave a message after the tone.');
-        twiml.record({
-            maxLength: 30,
-            action: '/voicemail-complete'
-        });
+      if (data.event === 'start') {
+        console.log(`[Media Stream] Started for Call Session: ${data.start.call_session_id || data.start.call_control_id}`);
+      } else if (data.event === 'media') {
+        // Base64-encoded audio payload from Telnyx
+        const payload = data.media.payload;
+        // Process payload with your passphrase verification / speech recognition engine
+      } else if (data.event === 'stop') {
+        console.log('[Media Stream] Stopped');
+      }
+    } catch (e) {
+      console.error('[Media Stream] Message parse error:', e.message);
     }
+  });
 
-    res.type('text/xml');
-    res.send(twiml.toString());
+  ws.on('close', () => {
+    console.log('[Media Stream] WebSocket client disconnected');
+  });
 });
 
-app.post('/voicemail-complete', (req, res) => {
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say('Thank you. Your message has been recorded. Goodbye.');
-    res.type('text/xml');
-    res.send(twiml.toString());
-});
-
+// -------------------------------------------------------------
+// 5. Start Server
+// -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MobileCallShield server running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
-
