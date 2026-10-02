@@ -30,20 +30,19 @@ app.get('/api/shield-number', (req, res) => {
 // 2. Telnyx Inbound Voice Webhook (TeXML)
 // -------------------------------------------------------------
 app.post('/voice', (req, res) => {
-  const callerNumber = req.body.From || req.body.data?.payload?.from || 'Unknown';
-  console.log(`[Voice] Incoming call from: ${callerNumber}`);
+  console.log('[VOICE] Incoming call from:', req.body?.From || req.body?.from);
 
-  // Telnyx TeXML response to ask for passphrase and connect to WebSocket media stream
-  const texml = `<?xml version="1.0" encoding="UTF-8"?>
-  <Response>
-    <Say voice="alice">Hello. Please state your passphrase to verify your identity.</Say>
-    <Connect>
-      <Stream url="wss://${req.headers.host}/media-stream" track="inbound_track" />
-    </Connect>
-  </Response>`;
-
+  // Telnyx MUST receive text/xml content-type
   res.type('text/xml');
-  res.send(texml);
+
+  // Return valid TeXML XML response
+  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Thank you for calling Senior Scam Shield. Please speak your passphrase after the tone.</Say>
+    <Pause length="1"/>
+</Response>`;
+
+  res.send(xmlResponse);
 });
 
 // -------------------------------------------------------------
