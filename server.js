@@ -1,7 +1,9 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const telnyx = require('telnyx')(process.env.TELNYX_API_KEY);
+const Telnyx = require('telnyx');
+
+const telnyx = new Telnyx({ apiKey: process.env.TELNYX_API_KEY });
 
 const app = express();
 const server = http.createServer(app);
