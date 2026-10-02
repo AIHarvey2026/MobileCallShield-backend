@@ -73,8 +73,8 @@ app.post('/sms', async (req, res) => {
   try {
     await telnyx.messages.send({
       from: process.env.SHIELD_PHONE_NUMBER || '+13466036303',
-      to: callerNumber,
-      text: replyMessage
+      to: fromNumber,
+      text: replyText
     });
     console.log(`[SMS] Reply sent to ${fromNumber}`);
   } catch (err) {
