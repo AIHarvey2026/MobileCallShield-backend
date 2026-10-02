@@ -51,26 +51,27 @@ app.post('/voice', (req, res) => {
 // -------------------------------------------------------------
 app.post('/sms', async (req, res) => {
   try {
-    const data = req.body?.data || {};
-    const eventType = data.event_type;
+    const data = req.body?.data || req.body;
+    const eventType = data.event_type || req.body?.event_type;
 
-    // Only process inbound received messages
+    // Ignore non-inbound events like delivery status receipts
     if (eventType && eventType !== 'message.received') {
+      console.log(`[SMS] Ignoring non-inbound event: ${eventType}`);
       return res.status(200).send('Event ignored');
     }
 
-    const payload = data.payload || req.body;
+    const payload = data.payload || data;
 
-    // Extract real sender (+1 cell number) and recipient (+13466036303)
-    const fromNumber = payload.from?.phone_number || payload.from;
-    const toNumber = payload.to?.[0]?.phone_number || process.env.SHIELD_PHONE_NUMBER || '+13466036303';
-    const messageText = (payload.text || '').trim();
+    // Extract sender (+1 mobile cell) and receiver (+13466036303)
+    const fromNumber = payload.from?.phone_number || payload.from || payload.From;
+    const toNumber = payload.to?.[0]?.phone_number || payload.to || process.env.SHIELD_PHONE_NUMBER || '+13466036303';
+    const messageText = (payload.text || payload.Body || '').trim();
 
-    console.log(`[SMS] Received from ${fromNumber}: "${messageText}"`);
+    console.log(`[SMS] Incoming text from ${fromNumber}: "${messageText}"`);
 
-    // Prevent replying to ourselves
+    // Guard against replying to ourselves
     if (fromNumber === toNumber) {
-      console.log('[SMS] Skipping loop: from and to numbers are identical.');
+      console.log('[SMS] Guard triggered: loop prevented.');
       return res.status(200).send('Loop prevented');
     }
 
@@ -89,7 +90,7 @@ app.post('/sms', async (req, res) => {
       replyText = `Guardian notification number set to: ${guardianNum}.`;
     }
 
-    // Send reply SMS
+    // Dispatch reply SMS via Telnyx
     await telnyx.messages.send({
       from: toNumber,
       to: fromNumber,
