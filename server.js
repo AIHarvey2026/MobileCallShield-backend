@@ -71,9 +71,9 @@ app.post('/voice', (req, res) => {
   if (!existingPassphrase) {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="dtmf" action="/voice/setup" method="POST" timeout="3" numDigits="4" finishOnKey="#">
+    <Gather input="dtmf" action="/voice/setup" method="POST" timeout="4" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
-            Welcome to Mobile Call Shield. Please enter a 4-digit code using your keypad, followed by the pound key.
+            Welcome to Mobile Call Shield. Please enter a 4-digit code on your keypad, followed by the pound key.
         </Say>
     </Gather>
     <Say voice="Polly.Joanna-Neural">No code received. Goodbye.</Say>
@@ -85,9 +85,9 @@ app.post('/voice', (req, res) => {
   // RETURNING CALLER: Prompt for existing 4-digit PIN
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="dtmf" action="/voice/process" method="POST" timeout="3" numDigits="4" finishOnKey="#">
+    <Gather input="dtmf" action="/voice/process" method="POST" timeout="4" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
-            Thank you for calling Mobile Call Shield. Please enter your 4-digit code now.
+            Thank you for calling Mobile Call Shield. Please enter your 4-digit code on your keypad now.
         </Say>
     </Gather>
     <Say voice="Polly.Joanna-Neural">No code received. Goodbye.</Say>
@@ -117,7 +117,7 @@ app.post('/voice/setup', (req, res) => {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Your code has been saved. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">+18324254469</Dial>
+    <Dial timeout="20" callerId="${callerNumber}">+15551234567</Dial>
 </Response>`;
     return res.send(xmlResponse);
   }
@@ -150,7 +150,7 @@ app.post('/voice/process', (req, res) => {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">+18324254469</Dial>
+    <Dial timeout="20" callerId="${callerNumber}">+15551234567</Dial>
 </Response>`;
     return res.send(xmlResponse);
   }
@@ -164,6 +164,7 @@ app.post('/voice/process', (req, res) => {
 
   res.send(xmlResponse);
 });
+
 // -------------------------------------------------------------
 // 3. Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
