@@ -50,42 +50,59 @@ app.post('/voice', (req, res) => {
 // 3. Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
 app.post('/sms', async (req, res) => {
-  const body = req.body.data?.payload || req.body;
-  const fromNumber = body.from?.phone_number || body.From;
-  const messageText = (body.text || body.Body || '').trim();
-
-  console.log(`[SMS] Received from ${fromNumber}: "${messageText}"`);
-
-  let replyText = 'Command not recognized. Valid commands: ALERTS ON/OFF, SET PASSPHRASE [word], SET GUARDIAN [number].';
-  const textUpper = messageText.toUpperCase();
-
-  if (textUpper === 'ALERTS ON') {
-    replyText = 'Shield Alerts enabled. You will receive SMS alerts for unverified calls.';
-  } else if (textUpper === 'ALERTS OFF') {
-    replyText = 'Shield Alerts disabled.';
-  } else if (textUpper.startsWith('SET PASSPHRASE ')) {
-    const newPassphrase = messageText.substring(15).trim();
-    replyText = `Passphrase updated successfully to: "${newPassphrase}".`;
-  } else if (textUpper.startsWith('SET GUARDIAN ')) {
-    const guardianNum = messageText.substring(13).trim();
-    replyText = `Guardian notification number set to: ${guardianNum}.`;
-  }
-
-  // Send reply SMS using Telnyx Messaging API
   try {
+    const data = req.body?.data || {};
+    const eventType = data.event_type;
+
+    // Only process inbound received messages
+    if (eventType && eventType !== 'message.received') {
+      return res.status(200).send('Event ignored');
+    }
+
+    const payload = data.payload || req.body;
+
+    // Extract real sender (+1 cell number) and recipient (+13466036303)
+    const fromNumber = payload.from?.phone_number || payload.from;
+    const toNumber = payload.to?.[0]?.phone_number || process.env.SHIELD_PHONE_NUMBER || '+13466036303';
+    const messageText = (payload.text || '').trim();
+
+    console.log(`[SMS] Received from ${fromNumber}: "${messageText}"`);
+
+    // Prevent replying to ourselves
+    if (fromNumber === toNumber) {
+      console.log('[SMS] Skipping loop: from and to numbers are identical.');
+      return res.status(200).send('Loop prevented');
+    }
+
+    let replyText = 'Command not recognized. Valid commands: ALERTS ON/OFF, SET PASSPHRASE [word], SET GUARDIAN [number].';
+    const textUpper = messageText.toUpperCase();
+
+    if (textUpper === 'ALERTS ON') {
+      replyText = 'Shield Alerts enabled. You will receive SMS alerts for unverified calls.';
+    } else if (textUpper === 'ALERTS OFF') {
+      replyText = 'Shield Alerts disabled.';
+    } else if (textUpper.startsWith('SET PASSPHRASE ')) {
+      const newPassphrase = messageText.substring(15).trim();
+      replyText = `Passphrase updated successfully to: "${newPassphrase}".`;
+    } else if (textUpper.startsWith('SET GUARDIAN ')) {
+      const guardianNum = messageText.substring(13).trim();
+      replyText = `Guardian notification number set to: ${guardianNum}.`;
+    }
+
+    // Send reply SMS
     await telnyx.messages.send({
-      from: process.env.SHIELD_PHONE_NUMBER || '+13466036303',
+      from: toNumber,
       to: fromNumber,
       text: replyText
     });
+
     console.log(`[SMS] Reply sent to ${fromNumber}`);
+    res.status(200).send('OK');
   } catch (err) {
-    console.error('[SMS] Error sending Telnyx reply:', err.message);
+    console.error('[SMS] Error handling webhook:', err.message);
+    res.status(200).send('Error processed');
   }
-
-  res.sendStatus(200);
 });
-
 // -------------------------------------------------------------
 // 4. WebSocket Server for Live Audio Screening
 // -------------------------------------------------------------
