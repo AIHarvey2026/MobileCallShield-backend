@@ -32,14 +32,15 @@ app.get('/api/shield-number', (req, res) => {
 app.post('/voice', (req, res) => {
   console.log('[VOICE] Incoming call from:', req.body?.From || req.body?.from);
 
-  // Telnyx MUST receive text/xml content-type
   res.type('text/xml');
 
-  // Return valid TeXML XML response
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>Thank you for calling Senior Scam Shield. Please speak your passphrase after the tone.</Say>
-    <Pause length="1"/>
+    <Gather input="speech dtmf" timeout="5" numDigits="4">
+        <Say>Thank you for calling Mobile Call Shield. Please enter or speak your passphrase code now.</Say>
+    </Gather>
+    <Say>We did not receive any input. Goodbye.</Say>
+    <Hangup/>
 </Response>`;
 
   res.send(xmlResponse);
