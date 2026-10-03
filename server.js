@@ -201,6 +201,7 @@ app.post('/voice/voicemail-complete', async (req, res) => {
 
   if (recordingUrl && process.env.TELNYX_API_KEY) {
     try {
+      // Use messages.create for the official Telnyx Node SDK
       await telnyx.messages.create({
         from: SHIELD_PHONE_NUMBER,
         to: OWNER_PHONE_NUMBER,
@@ -221,7 +222,6 @@ app.post('/voice/voicemail-complete', async (req, res) => {
 
   res.send(xmlResponse);
 });
-
 // -------------------------------------------------------------
 // Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
