@@ -1,9 +1,9 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const Telnyx = require('telnyx');
-const fs = require('fs');
-const path = require('path');
+const { Pool } = require('pg');
 
 const telnyx = Telnyx(process.env.TELNYX_API_KEY);
 
@@ -14,100 +14,69 @@ const wss = new WebSocket.Server({ server });
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Configuration
+// Initialize PostgreSQL Connection Pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+// Configuration Defaults
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
 const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://mobile-call-shield.onrender.com';
-
-// Local JSON file to store settings and contacts
-const PASSPHRASE_FILE = path.join(__dirname, 'passphrases.json');
-
-// -------------------------------------------------------------
-// Data Helper Functions (Structured JSON Model)
-// -------------------------------------------------------------
-function loadData() {
-  try {
-    if (fs.existsSync(PASSPHRASE_FILE)) {
-      const raw = fs.readFileSync(PASSPHRASE_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
-      return {
-        settings: parsed.settings || { ownerPhoneNumber: OWNER_PHONE_NUMBER, alertsEnabled: true },
-        contacts: parsed.contacts || parsed.passphrases || {}
-      };
-    }
-  } catch (err) {
-    console.error('[STORAGE] Error reading JSON data:', err.message);
-  }
-  return {
-    settings: { ownerPhoneNumber: OWNER_PHONE_NUMBER, alertsEnabled: true },
-    contacts: {}
-  };
-}
-
-function saveData(data) {
-  try {
-    fs.writeFileSync(PASSPHRASE_FILE, JSON.stringify(data, null, 2), 'utf8');
-  } catch (err) {
-    console.error('[STORAGE] Error saving JSON data:', err.message);
-  }
-}
-
-// Safely gets PIN string regardless of legacy or object format
-function getSavedPin(contacts, callerNumber) {
-  const entry = contacts[callerNumber];
-  if (!entry) return null;
-  if (typeof entry === 'string') return entry;
-  return entry.pin || null;
-}
 
 // -------------------------------------------------------------
 // 1. Health Check & Config Endpoints
 // -------------------------------------------------------------
 app.get('/', (req, res) => {
-  res.send('Mobile Call Shield Backend (Telnyx) Active');
+  res.send('Mobile Call Shield Backend (PostgreSQL Multi-Tenant) Active');
 });
 
 app.get('/api/shield-number', (req, res) => {
-  res.json({
-    shieldNumber: SHIELD_PHONE_NUMBER
-  });
+  res.json({ shieldNumber: SHIELD_PHONE_NUMBER });
 });
-
-app.get('/api/debug-passphrases', (req, res) => {
-  try {
-    const data = loadData();
-    res.json({
-      status: 'success',
-      storageFileExists: fs.existsSync(PASSPHRASE_FILE),
-      totalContacts: Object.keys(data.contacts).length,
-      data: data
-    });
-  } catch (err) {
-    console.error('[DEBUG ERROR]', err);
-    res.status(500).json({ status: 'error', error: err.message });
-  }
-});
-
-// =============================================================
-// TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
-// =============================================================
 
 // -------------------------------------------------------------
+// 2. TELNYX INBOUND VOICE ROUTES (PostgreSQL Driven)
+// -------------------------------------------------------------
+
 // Voice Step 1: Initial Call Entry Point
-// -------------------------------------------------------------
-app.post('/voice', (req, res) => {
+app.post('/voice', async (req, res) => {
+  const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  console.log('[VOICE] Incoming call from:', callerNumber);
 
-  const db = loadData();
-  const existingPin = getSavedPin(db.contacts, callerNumber);
-
+  console.log(`[VOICE] Incoming call To: ${calledNumber} | From: ${callerNumber}`);
   res.type('text/xml');
 
-  // FIRST-TIME CALLER: Route to /voice/setup to create and save a PIN
-  if (!existingPin) {
-    console.log(`[VOICE] New caller ${callerNumber} -> Routing to /voice/setup`);
-    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+  try {
+    // 1. Identify owner of the shield number in DB
+    const userResult = await pool.query(
+      `SELECT user_id FROM phone_numbers WHERE shield_number = $1 AND status = 'assigned'`,
+      [calledNumber]
+    );
+
+    if (userResult.rows.length === 0) {
+      console.log(`[UNASSIGNED NUMBER] No active account for ${calledNumber}`);
+      const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">This shield number is currently unassigned. Goodbye.</Say>
+    <Hangup/>
+</Response>`;
+      return res.send(xmlResponse);
+    }
+
+    const userId = userResult.rows[0].user_id;
+
+    // 2. Check if caller is already saved in contacts
+    const contactResult = await pool.query(
+      `SELECT pin_code, is_allowed FROM contacts WHERE user_id = $1 AND caller_number = $2`,
+      [userId, callerNumber]
+    );
+
+    // FIRST-TIME CALLER: Route to /voice/setup to create a PIN
+    if (contactResult.rows.length === 0) {
+      console.log(`[VOICE] New caller ${callerNumber} -> Routing to /voice/setup`);
+      const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="dtmf" action="${BASE_URL}/voice/setup" method="POST" timeout="5" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
@@ -116,12 +85,12 @@ app.post('/voice', (req, res) => {
     </Gather>
     <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
-    return res.send(xmlResponse);
-  }
+      return res.send(xmlResponse);
+    }
 
-  // RETURNING CALLER: Route to /voice/process to verify existing PIN
-  console.log(`[VOICE] Returning caller ${callerNumber} -> Routing to /voice/process`);
-  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+    // RETURNING CALLER: Route to /voice/process to verify existing PIN
+    console.log(`[VOICE] Returning caller ${callerNumber} -> Routing to /voice/process`);
+    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="dtmf" action="${BASE_URL}/voice/process" method="POST" timeout="5" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
@@ -130,37 +99,62 @@ app.post('/voice', (req, res) => {
     </Gather>
     <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
+    return res.send(xmlResponse);
 
-  res.send(xmlResponse);
-});
-
-// -------------------------------------------------------------
-// Voice Step 2: Setup / Change Passphrase (4-Digit PIN)
-// -------------------------------------------------------------
-app.post('/voice/setup', (req, res) => {
-  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const digits = req.body?.Digits || req.body?.digits || '';
-  const newPin = digits.trim();
-
-  console.log(`[VOICE SETUP] ${callerNumber} set PIN: "${newPin}"`);
-
-  res.type('text/xml');
-
-  if (newPin.length === 4) {
-    const db = loadData();
-    db.contacts[callerNumber] = {
-      pin: newPin,
-      allowed: true,
-      updatedAt: new Date().toISOString()
-    };
-    saveData(db);
-
+  } catch (err) {
+    console.error('[VOICE DB ERROR]', err);
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">Your code has been saved. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">${OWNER_PHONE_NUMBER}</Dial>
+    <Say voice="Polly.Joanna-Neural">An error occurred while processing your call. Goodbye.</Say>
+    <Hangup/>
 </Response>`;
     return res.send(xmlResponse);
+  }
+});
+
+// Voice Step 2: Setup PIN for New Caller
+app.post('/voice/setup', async (req, res) => {
+  const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
+  const digits = (req.body?.Digits || req.body?.digits || '').trim();
+
+  console.log(`[VOICE SETUP] ${callerNumber} entering PIN: "${digits}"`);
+  res.type('text/xml');
+
+  if (digits.length === 4) {
+    try {
+      // Find owner of shield number
+      const userResult = await pool.query(
+        `SELECT u.id, u.owner_phone FROM users u 
+         JOIN phone_numbers p ON u.id = p.user_id 
+         WHERE p.shield_number = $1`,
+        [calledNumber]
+      );
+
+      if (userResult.rows.length > 0) {
+        const user = userResult.rows[0];
+
+        // Save PIN into PostgreSQL contacts table
+        await pool.query(
+          `INSERT INTO contacts (user_id, caller_number, pin_code, is_allowed)
+           VALUES ($1, $2, $3, TRUE)
+           ON CONFLICT (user_id, caller_number) 
+           DO UPDATE SET pin_code = EXCLUDED.pin_code, updated_at = CURRENT_TIMESTAMP;`,
+          [user.id, callerNumber, digits]
+        );
+
+        const targetPhone = user.owner_phone || OWNER_PHONE_NUMBER;
+
+        const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Your code has been saved. Connecting your call now.</Say>
+    <Dial timeout="20" callerId="${callerNumber}">${targetPhone}</Dial>
+</Response>`;
+        return res.send(xmlResponse);
+      }
+    } catch (err) {
+      console.error('[SETUP DB ERROR]', err);
+    }
   }
 
   // Failed setup -> Send to Voicemail
@@ -171,47 +165,55 @@ app.post('/voice/setup', (req, res) => {
   res.send(xmlResponse);
 });
 
-// -------------------------------------------------------------
 // Voice Step 3: Process & Verify PIN
-// -------------------------------------------------------------
-app.post('/voice/process', (req, res) => {
+app.post('/voice/process', async (req, res) => {
+  const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const digits = req.body?.Digits || req.body?.digits || '';
-  const userPin = digits.trim();
-
-  const db = loadData();
-  const savedPin = getSavedPin(db.contacts, callerNumber);
-
-  console.log(`[VOICE VERIFY] ${callerNumber} entered PIN: "${userPin}" (Saved: "${savedPin}")`);
+  const userPin = (req.body?.Digits || req.body?.digits || '').trim();
 
   res.type('text/xml');
 
-  // Verify 4-Digit PIN
-  if (userPin && userPin === savedPin) {
-    const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+  try {
+    const contactResult = await pool.query(
+      `SELECT c.pin_code, u.owner_phone 
+       FROM contacts c
+       JOIN users u ON c.user_id = u.id
+       JOIN phone_numbers p ON u.id = p.user_id
+       WHERE p.shield_number = $1 AND c.caller_number = $2`,
+      [calledNumber, callerNumber]
+    );
+
+    if (contactResult.rows.length > 0) {
+      const { pin_code, owner_phone } = contactResult.rows[0];
+
+      if (userPin === pin_code) {
+        const targetPhone = owner_phone || OWNER_PHONE_NUMBER;
+        console.log(`[VERIFY SUCCESS] PIN verified for ${callerNumber}. Dialing owner ${targetPhone}`);
+
+        const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">${OWNER_PHONE_NUMBER}</Dial>
+    <Dial timeout="20" callerId="${callerNumber}">${targetPhone}</Dial>
 </Response>`;
-    return res.send(xmlResponse);
+        return res.send(xmlResponse);
+      }
+    }
+  } catch (err) {
+    console.error('[VERIFY DB ERROR]', err);
   }
 
-  // Verification FAILURE -> Redirect to Voicemail
+  console.log(`[VERIFY FAILED] Invalid PIN from ${callerNumber}`);
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Invalid code.</Say>
     <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
-
   res.send(xmlResponse);
 });
 
-// -------------------------------------------------------------
 // Voice Step 4: Voicemail Recording Route
-// -------------------------------------------------------------
 app.post('/voice/voicemail', (req, res) => {
   res.type('text/xml');
-
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">
@@ -227,44 +229,18 @@ app.post('/voice/voicemail', (req, res) => {
     <Say voice="Polly.Joanna-Neural">Thank you. Your message has been saved. Goodbye.</Say>
     <Hangup/>
 </Response>`;
-
   res.send(xmlResponse);
 });
 
-// -------------------------------------------------------------
-// Voice Step 5: Voicemail Callback & SMS Notification
-// -------------------------------------------------------------
-app.post('/voice/voicemail-complete', async (req, res) => {
-  const callerNumber = req.body?.From || req.body?.from || 'Unknown Caller';
-  const recordingUrl = req.body?.RecordingUrl || req.body?.recording_url || '';
-
-  console.log(`[VOICEMAIL] New message from ${callerNumber}: ${recordingUrl}`);
-
-  if (recordingUrl && process.env.TELNYX_API_KEY) {
-    try {
-      await telnyx.messages.create({
-        from: SHIELD_PHONE_NUMBER,
-        to: OWNER_PHONE_NUMBER,
-        text: `Mobile Call Shield Alert: New voicemail from ${callerNumber}.\n\nListen here: ${recordingUrl}`
-      });
-      console.log(`[SMS] Voicemail alert sent to ${OWNER_PHONE_NUMBER}`);
-    } catch (err) {
-      console.error('[SMS ERROR] Failed to send voicemail alert:', err.message);
-    }
-  }
-
+// Voice Step 5: Voicemail Complete Callback
+app.post('/voice/voicemail-complete', (req, res) => {
+  console.log('[VOICEMAIL RECORDED]', req.body);
   res.type('text/xml');
-  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="Polly.Joanna-Neural">Thank you. Your message has been saved. Goodbye.</Say>
-    <Hangup/>
-</Response>`;
-
-  res.send(xmlResponse);
+  res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
 });
 
 // -------------------------------------------------------------
-// Telnyx Inbound SMS Webhook
+// 3. Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
 app.post('/sms', async (req, res) => {
   try {
@@ -272,7 +248,6 @@ app.post('/sms', async (req, res) => {
     const eventType = data.event_type || req.body?.event_type;
 
     if (eventType && eventType !== 'message.received') {
-      console.log(`[SMS] Ignoring non-inbound event: ${eventType}`);
       return res.status(200).send('Event ignored');
     }
 
@@ -284,20 +259,16 @@ app.post('/sms', async (req, res) => {
     console.log(`[SMS] Incoming text from ${fromNumber}: "${messageText}"`);
 
     if (fromNumber === toNumber) {
-      console.log('[SMS] Guard triggered: loop prevented.');
       return res.status(200).send('Loop prevented');
     }
 
-    let replyText = 'Command not recognized. Valid commands: ALERTS ON/OFF, SET PASSPHRASE [word], SET GUARDIAN [number].';
+    let replyText = 'Command not recognized. Valid commands: ALERTS ON/OFF, SET GUARDIAN [number].';
     const textUpper = messageText.toUpperCase();
 
     if (textUpper === 'ALERTS ON') {
       replyText = 'Shield Alerts enabled. You will receive SMS alerts for unverified calls.';
     } else if (textUpper === 'ALERTS OFF') {
       replyText = 'Shield Alerts disabled.';
-    } else if (textUpper.startsWith('SET PASSPHRASE ')) {
-      const newPassphrase = messageText.substring(15).trim();
-      replyText = `Passphrase updated successfully to: "${newPassphrase}".`;
     } else if (textUpper.startsWith('SET GUARDIAN ')) {
       const guardianNum = messageText.substring(13).trim();
       replyText = `Guardian notification number set to: ${guardianNum}.`;
@@ -312,13 +283,13 @@ app.post('/sms', async (req, res) => {
     console.log(`[SMS] Reply sent to ${fromNumber}`);
     res.status(200).send('OK');
   } catch (err) {
-    console.error('[SMS] Error handling webhook:', err.message);
+    console.error('[SMS ERROR]', err.message);
     res.status(200).send('Error processed');
   }
 });
 
 // -------------------------------------------------------------
-// WebSocket Server for Live Audio Screening
+// 4. WebSocket Server for Live Audio Screening
 // -------------------------------------------------------------
 wss.on('connection', (ws) => {
   console.log('[Media Stream] WebSocket client connected');
@@ -326,26 +297,21 @@ wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
       const data = JSON.parse(message);
-
       if (data.event === 'start') {
-        console.log(`[Media Stream] Started for Call Session: ${data.start.call_session_id || data.start.call_control_id}`);
-      } else if (data.event === 'media') {
-        // Audio processing logic
+        console.log(`[Media Stream] Started: ${data.start.call_session_id || data.start.call_control_id}`);
       } else if (data.event === 'stop') {
         console.log('[Media Stream] Stopped');
       }
     } catch (e) {
-      console.error('[Media Stream] Message parse error:', e.message);
+      console.error('[Media Stream] Parse error:', e.message);
     }
   });
 
-  ws.on('close', () => {
-    console.log('[Media Stream] WebSocket client disconnected');
-  });
+  ws.on('close', () => console.log('[Media Stream] Disconnected'));
 });
 
 // -------------------------------------------------------------
-// Start Server
+// 5. Start Server
 // -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
