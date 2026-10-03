@@ -311,6 +311,169 @@ wss.on('connection', (ws) => {
 });
 
 // -------------------------------------------------------------
+// REST API ENDPOINTS FOR ANDROID APP (Auth & Contacts)
+// -------------------------------------------------------------
+
+// 1. User Registration & Shield Number Auto-Assignment
+app.post('/api/auth/register', async (req, res) => {
+  const { email, password, owner_phone } = req.body;
+
+  if (!email || !password || !owner_phone) {
+    return res.status(400).json({ error: 'Email, password, and owner_phone are required.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Create user record
+    const userRes = await client.query(
+      `INSERT INTO users (email, password_hash, owner_phone, status)
+       VALUES ($1, $2, $3, 'trialing')
+       RETURNING id, email, owner_phone, status, created_at;`,
+      [email, password, owner_phone] // Note: In production, hash password using bcrypt
+    );
+    const user = userRes.rows[0];
+
+    // Auto-assign available shield number from pool
+    const numRes = await client.query(
+      `SELECT id, shield_number FROM phone_numbers 
+       WHERE status = 'unassigned' LIMIT 1 FOR UPDATE;`
+    );
+
+    let assignedNumber = null;
+    if (numRes.rows.length > 0) {
+      assignedNumber = numRes.rows[0].shield_number;
+      await client.query(
+        `UPDATE phone_numbers 
+         SET status = 'assigned', user_id = $1, assigned_at = CURRENT_TIMESTAMP 
+         WHERE id = $2;`,
+        [user.id, numRes.rows[0].id]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      message: 'User registered successfully',
+      user: {
+        id: user.id,
+        email: user.email,
+        ownerPhone: user.owner_phone,
+        shieldNumber: assignedNumber
+      }
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[AUTH REGISTER ERROR]', err.message);
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Email address is already registered.' });
+    }
+    res.status(500).json({ error: 'Internal server error during registration.' });
+  } finally {
+    client.release();
+  }
+});
+
+// 2. User Login
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const userRes = await pool.query(
+      `SELECT u.id, u.email, u.password_hash, u.owner_phone, u.status, p.shield_number 
+       FROM users u
+       LEFT JOIN phone_numbers p ON u.id = p.user_id
+       WHERE u.email = $1;`,
+      [email]
+    );
+
+    if (userRes.rows.length === 0 || userRes.rows[0].password_hash !== password) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const user = userRes.rows[0];
+    res.json({
+      message: 'Login successful',
+      user: {
+        id: user.id,
+        email: user.email,
+        ownerPhone: user.owner_phone,
+        shieldNumber: user.shield_number || null,
+        status: user.status
+      }
+    });
+  } catch (err) {
+    console.error('[AUTH LOGIN ERROR]', err.message);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+// 3. Get User's Contacts Whitelist
+app.get('/api/contacts/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const contactsRes = await pool.query(
+      `SELECT id, caller_number, pin_code, is_allowed, updated_at 
+       FROM contacts WHERE user_id = $1 
+       ORDER BY updated_at DESC;`,
+      [userId]
+    );
+
+    res.json({ contacts: contactsRes.rows });
+  } catch (err) {
+    console.error('[GET CONTACTS ERROR]', err.message);
+    res.status(500).json({ error: 'Failed to fetch contacts.' });
+  }
+});
+
+// 4. Add or Update a Whitelisted Contact/PIN
+app.post('/api/contacts', async (req, res) => {
+  const { user_id, caller_number, pin_code, is_allowed } = req.body;
+
+  if (!user_id || !caller_number || !pin_code) {
+    return res.status(400).json({ error: 'user_id, caller_number, and pin_code are required.' });
+  }
+
+  try {
+    const contactRes = await pool.query(
+      `INSERT INTO contacts (user_id, caller_number, pin_code, is_allowed)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, caller_number)
+       DO UPDATE SET pin_code = EXCLUDED.pin_code, 
+                     is_allowed = EXCLUDED.is_allowed, 
+                     updated_at = CURRENT_TIMESTAMP
+       RETURNING *;`,
+      [user_id, caller_number, pin_code, is_allowed ?? true]
+    );
+
+    res.status(200).json({
+      message: 'Contact updated successfully',
+      contact: contactRes.rows[0]
+    });
+  } catch (err) {
+    console.error('[SAVE CONTACT ERROR]', err.message);
+    res.status(500).json({ error: 'Failed to save contact.' });
+  }
+});
+
+// 5. Delete Contact from Whitelist
+app.delete('/api/contacts/:contactId', async (req, res) => {
+  const { contactId } = req.params;
+
+  try {
+    await pool.query(`DELETE FROM contacts WHERE id = $1;`, [contactId]);
+    res.json({ message: 'Contact removed successfully.' });
+  } catch (err) {
+    console.error('[DELETE CONTACT ERROR]', err.message);
+    res.status(500).json({ error: 'Failed to delete contact.' });
+  }
+});
+
+
+
+// -------------------------------------------------------------
 // 5. Start Server
 // -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
