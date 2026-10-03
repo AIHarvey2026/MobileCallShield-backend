@@ -4,9 +4,14 @@ const http = require('http');
 const WebSocket = require('ws');
 const Telnyx = require('telnyx');
 const { Pool } = require('pg');
+const Stripe = require('stripe');
 
-const telnyx = Telnyx(process.env.TELNYX_API_KEY);
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
+const telnyxApiKey = process.env.TELNYX_API_KEY || '';
+
+const stripe = Stripe(stripeSecret);
+const telnyxClient = new Telnyx({ apiKey: telnyxApiKey });
+
 
 const app = express();
 const server = http.createServer(app);
