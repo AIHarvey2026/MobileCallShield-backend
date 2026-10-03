@@ -12,7 +12,6 @@ const telnyxApiKey = process.env.TELNYX_API_KEY || '';
 const stripe = Stripe(stripeSecret);
 const telnyxClient = new Telnyx({ apiKey: telnyxApiKey });
 
-
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -182,7 +181,7 @@ app.get('/api/shield-number', (req, res) => {
 // 4. REST API ENDPOINTS FOR ANDROID APP (Auth & Contacts)
 // -------------------------------------------------------------
 
-// 1. User Registration & Shield Number Auto-Assignment
+// User Registration & Shield Number Auto-Assignment
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, owner_phone } = req.body;
 
@@ -241,7 +240,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// 2. User Login
+// User Login
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -275,7 +274,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// 3. Get User's Contacts Whitelist
+// Get User's Contacts Whitelist
 app.get('/api/contacts/:userId', async (req, res) => {
   const { userId } = req.params;
 
@@ -294,7 +293,7 @@ app.get('/api/contacts/:userId', async (req, res) => {
   }
 });
 
-// 4. Add or Update a Whitelisted Contact/PIN
+// Add or Update a Whitelisted Contact/PIN
 app.post('/api/contacts', async (req, res) => {
   const { user_id, caller_number, pin_code, is_allowed } = req.body;
 
@@ -324,7 +323,7 @@ app.post('/api/contacts', async (req, res) => {
   }
 });
 
-// 5. Delete Contact from Whitelist
+// Delete Contact from Whitelist
 app.delete('/api/contacts/:contactId', async (req, res) => {
   const { contactId } = req.params;
 
@@ -338,7 +337,7 @@ app.delete('/api/contacts/:contactId', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 5. TELNYX INBOUND VOICE ROUTES
+// 5. TELNYX INBOUND VOICE ROUTES (TeXML Flow)
 // -------------------------------------------------------------
 
 // Voice Step 1: Initial Call Entry Point
@@ -568,7 +567,7 @@ app.post('/sms', async (req, res) => {
       replyText = `Guardian notification number set to: ${guardianNum}.`;
     }
 
-    await telnyx.messages.create({
+    await telnyxClient.messages.create({
       from: toNumber,
       to: fromNumber,
       text: replyText
