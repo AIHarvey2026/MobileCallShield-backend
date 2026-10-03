@@ -72,7 +72,7 @@ app.get('/api/debug-passphrases', (req, res) => {
 // TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
 // =============================================================
 
-// -------------------------------------------------------------
+/ -------------------------------------------------------------
 // Voice Step 1: Initial Call Entry Point
 // -------------------------------------------------------------
 app.post('/voice', (req, res) => {
@@ -80,12 +80,15 @@ app.post('/voice', (req, res) => {
   console.log('[VOICE] Incoming call from:', callerNumber);
 
   const db = loadData();
-  const passphrases = db.passphrases || db;
-  const existingPassphrase = passphrases[callerNumber];
+  const passphrases = db.passphrases || {};
+  // Ensure existingPassphrase is a string value, not an object
+  const existingPassphrase = typeof passphrases[callerNumber] === 'string' ? passphrases[callerNumber] : null;
 
   res.type('text/xml');
 
+  // FIRST-TIME CALLER: Route to /voice/setup to create and save a PIN
   if (!existingPassphrase) {
+    console.log(`[VOICE] New caller ${callerNumber} -> Routing to /voice/setup`);
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="dtmf" action="${BASE_URL}/voice/setup" method="POST" timeout="5" numDigits="4" finishOnKey="#">
@@ -98,6 +101,8 @@ app.post('/voice', (req, res) => {
     return res.send(xmlResponse);
   }
 
+  // RETURNING CALLER: Route to /voice/process to verify existing PIN
+  console.log(`[VOICE] Returning caller ${callerNumber} -> Routing to /voice/process`);
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="dtmf" action="${BASE_URL}/voice/process" method="POST" timeout="5" numDigits="4" finishOnKey="#">
@@ -110,6 +115,7 @@ app.post('/voice', (req, res) => {
 
   res.send(xmlResponse);
 });
+
 
 // -------------------------------------------------------------
 // Voice Step 2: Setup / Change Passphrase (4-Digit PIN)
