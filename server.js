@@ -2,8 +2,10 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const Telnyx = require('telnyx');
+const fs = require('fs');
+const path = require('path');
 
-const telnyx = new Telnyx({ apiKey: process.env.TELNYX_API_KEY });
+const telnyx = Telnyx(process.env.TELNYX_API_KEY);
 
 const app = express();
 const server = http.createServer(app);
@@ -12,26 +14,9 @@ const wss = new WebSocket.Server({ server });
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// -------------------------------------------------------------
-// 1. Health Check Endpoint
-// -------------------------------------------------------------
-app.get('/', (req, res) => {
-  res.send('Senior Scam Shield Backend (Telnyx) Active');
-});
-
-// Endpoint for app/client to get the active Shield Number
-app.get('/api/shield-number', (req, res) => {
-  res.json({
-    shieldNumber: process.env.SHIELD_PHONE_NUMBER || '+13466036303'
-  });
-});
-
-// =============================================================
-// TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
-// =============================================================
-
-const fs = require('fs');
-const path = require('path');
+// Configuration
+const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+1YOURPHONENUMBER'; // Replace or set in Render
+const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
 
 // Local JSON file to store passphrases per caller phone number
 const PASSPHRASE_FILE = path.join(__dirname, 'passphrases.json');
@@ -56,7 +41,24 @@ function savePassphrases(data) {
 }
 
 // -------------------------------------------------------------
-// 1. Initial Call Entry Point
+// 1. Health Check & Config Endpoints
+// -------------------------------------------------------------
+app.get('/', (req, res) => {
+  res.send('Senior Scam Shield Backend (Telnyx) Active');
+});
+
+app.get('/api/shield-number', (req, res) => {
+  res.json({
+    shieldNumber: SHIELD_PHONE_NUMBER
+  });
+});
+
+// =============================================================
+// TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
+// =============================================================
+
+// -------------------------------------------------------------
+// Voice Step 1: Initial Call Entry Point
 // -------------------------------------------------------------
 app.post('/voice', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
@@ -76,8 +78,7 @@ app.post('/voice', (req, res) => {
             Welcome to Mobile Call Shield. Please enter a 4-digit code on your keypad, followed by the pound key.
         </Say>
     </Gather>
-    <Say voice="Polly.Joanna-Neural">No code received. Goodbye.</Say>
-    <Hangup/>
+    <Redirect method="POST">/voice/voicemail</Redirect>
 </Response>`;
     return res.send(xmlResponse);
   }
@@ -90,15 +91,14 @@ app.post('/voice', (req, res) => {
             Thank you for calling Mobile Call Shield. Please enter your 4-digit code on your keypad now.
         </Say>
     </Gather>
-    <Say voice="Polly.Joanna-Neural">No code received. Goodbye.</Say>
-    <Hangup/>
+    <Redirect method="POST">/voice/voicemail</Redirect>
 </Response>`;
 
   res.send(xmlResponse);
 });
 
 // -------------------------------------------------------------
-// 2. Setup / Change Passphrase (4-Digit PIN)
+// Voice Step 2: Setup / Change Passphrase (4-Digit PIN)
 // -------------------------------------------------------------
 app.post('/voice/setup', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
@@ -117,21 +117,21 @@ app.post('/voice/setup', (req, res) => {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Your code has been saved. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">+15551234567</Dial>
+    <Dial timeout="20" callerId="${callerNumber}">${OWNER_PHONE_NUMBER}</Dial>
 </Response>`;
     return res.send(xmlResponse);
   }
 
+  // Failed setup -> Send to Voicemail
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">Please enter a valid 4-digit code. Goodbye.</Say>
-    <Hangup/>
+    <Redirect method="POST">/voice/voicemail</Redirect>
 </Response>`;
   res.send(xmlResponse);
 });
 
 // -------------------------------------------------------------
-// 3. Process & Verify PIN
+// Voice Step 3: Process & Verify PIN
 // -------------------------------------------------------------
 app.post('/voice/process', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
@@ -150,15 +150,40 @@ app.post('/voice/process', (req, res) => {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">+15551234567</Dial>
+    <Dial timeout="20" callerId="${callerNumber}">${OWNER_PHONE_NUMBER}</Dial>
 </Response>`;
     return res.send(xmlResponse);
   }
 
-  // Verification FAILURE
+  // Verification FAILURE -> Redirect to Voicemail
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">Invalid code. Goodbye.</Say>
+    <Say voice="Polly.Joanna-Neural">Invalid code.</Say>
+    <Redirect method="POST">/voice/voicemail</Redirect>
+</Response>`;
+
+  res.send(xmlResponse);
+});
+
+// -------------------------------------------------------------
+// Voice Step 4: Voicemail Recording Route
+// -------------------------------------------------------------
+app.post('/voice/voicemail', (req, res) => {
+  res.type('text/xml');
+
+  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">
+        Please leave a message after the tone. Press pound when finished.
+    </Say>
+    <Record
+        action="/voice/voicemail-complete"
+        method="POST"
+        maxLength="60"
+        finishOnKey="#"
+        playBeep="true"
+    />
+    <Say voice="Polly.Joanna-Neural">Thank you. Your message has been saved. Goodbye.</Say>
     <Hangup/>
 </Response>`;
 
@@ -166,29 +191,57 @@ app.post('/voice/process', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. Telnyx Inbound SMS Webhook
+// Voice Step 5: Voicemail Callback & SMS Notification
+// -------------------------------------------------------------
+app.post('/voice/voicemail-complete', async (req, res) => {
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown Caller';
+  const recordingUrl = req.body?.RecordingUrl || req.body?.recording_url || '';
+
+  console.log(`[VOICEMAIL] New message from ${callerNumber}: ${recordingUrl}`);
+
+  if (recordingUrl && process.env.TELNYX_API_KEY) {
+    try {
+      await telnyx.messages.create({
+        from: SHIELD_PHONE_NUMBER,
+        to: OWNER_PHONE_NUMBER,
+        text: `Mobile Call Shield Alert: New voicemail from ${callerNumber}.\n\nListen here: ${recordingUrl}`
+      });
+      console.log(`[SMS] Voicemail alert sent to ${OWNER_PHONE_NUMBER}`);
+    } catch (err) {
+      console.error('[SMS ERROR] Failed to send voicemail alert:', err.message);
+    }
+  }
+
+  res.type('text/xml');
+  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Thank you. Your message has been saved. Goodbye.</Say>
+    <Hangup/>
+</Response>`;
+
+  res.send(xmlResponse);
+});
+
+// -------------------------------------------------------------
+// Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
 app.post('/sms', async (req, res) => {
   try {
     const data = req.body?.data || req.body;
     const eventType = data.event_type || req.body?.event_type;
 
-    // Ignore non-inbound events like delivery status receipts
     if (eventType && eventType !== 'message.received') {
       console.log(`[SMS] Ignoring non-inbound event: ${eventType}`);
       return res.status(200).send('Event ignored');
     }
 
     const payload = data.payload || data;
-
-    // Extract sender (+1 mobile cell) and receiver (+13466036303)
     const fromNumber = payload.from?.phone_number || payload.from || payload.From;
-    const toNumber = payload.to?.[0]?.phone_number || payload.to || process.env.SHIELD_PHONE_NUMBER || '+13466036303';
+    const toNumber = payload.to?.[0]?.phone_number || payload.to || SHIELD_PHONE_NUMBER;
     const messageText = (payload.text || payload.Body || '').trim();
 
     console.log(`[SMS] Incoming text from ${fromNumber}: "${messageText}"`);
 
-    // Guard against replying to ourselves
     if (fromNumber === toNumber) {
       console.log('[SMS] Guard triggered: loop prevented.');
       return res.status(200).send('Loop prevented');
@@ -209,8 +262,7 @@ app.post('/sms', async (req, res) => {
       replyText = `Guardian notification number set to: ${guardianNum}.`;
     }
 
-    // Dispatch reply SMS via Telnyx
-    await telnyx.messages.send({
+    await telnyx.messages.create({
       from: toNumber,
       to: fromNumber,
       text: replyText
@@ -223,8 +275,9 @@ app.post('/sms', async (req, res) => {
     res.status(200).send('Error processed');
   }
 });
+
 // -------------------------------------------------------------
-// 4. WebSocket Server for Live Audio Screening
+// WebSocket Server for Live Audio Screening
 // -------------------------------------------------------------
 wss.on('connection', (ws) => {
   console.log('[Media Stream] WebSocket client connected');
@@ -236,9 +289,8 @@ wss.on('connection', (ws) => {
       if (data.event === 'start') {
         console.log(`[Media Stream] Started for Call Session: ${data.start.call_session_id || data.start.call_control_id}`);
       } else if (data.event === 'media') {
-        // Base64-encoded audio payload from Telnyx
         const payload = data.media.payload;
-        // Process payload with your passphrase verification / speech recognition engine
+        // Audio processing logic
       } else if (data.event === 'stop') {
         console.log('[Media Stream] Stopped');
       }
@@ -253,7 +305,7 @@ wss.on('connection', (ws) => {
 });
 
 // -------------------------------------------------------------
-// 5. Start Server
+// Start Server
 // -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
