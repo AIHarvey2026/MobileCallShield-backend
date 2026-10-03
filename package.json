@@ -1,16 +1,14 @@
 {
-  "name": "mobilecallshield-backend",
+  "name": "mobile-call-shield-backend",
   "version": "1.0.0",
-  "description": "Backend service for Senior Scam Shield PSTN gateway and AI monitoring",
+  "description": "Mobile Call Shield Backend Service",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "init-db": "node init-db.js",
+    "seed": "node seed-numbers.js"
   },
   "dependencies": {
-    "body-parser": "^1.20.2",
-    "dotenv": "^16.6.1",
-    "express": "^4.19.2","dependencies": {
     "body-parser": "^1.20.2",
     "dotenv": "^16.6.1",
     "express": "^4.19.2",
