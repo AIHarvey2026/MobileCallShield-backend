@@ -15,7 +15,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Configuration
-const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+1YOURPHONENUMBER'; // Replace or set in Render
+const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469'; // Replace or set in Render
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
 
 // Local JSON file to store passphrases per caller phone number
