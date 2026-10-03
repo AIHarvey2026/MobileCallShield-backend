@@ -15,13 +15,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Configuration
-const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469'; // Replace or set in Render
+const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
+const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://mobile-call-shield.onrender.com';
 
 // Local JSON file to store passphrases per caller phone number
 const PASSPHRASE_FILE = path.join(__dirname, 'passphrases.json');
 
-function loadPassphrases() {
+function loadData() {
   try {
     if (fs.existsSync(PASSPHRASE_FILE)) {
       return JSON.parse(fs.readFileSync(PASSPHRASE_FILE, 'utf8'));
@@ -29,10 +30,10 @@ function loadPassphrases() {
   } catch (err) {
     console.error('Error reading passphrases file:', err);
   }
-  return {};
+  return { passphrases: {}, settings: {} };
 }
 
-function savePassphrases(data) {
+function saveData(data) {
   try {
     fs.writeFileSync(PASSPHRASE_FILE, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
@@ -53,17 +54,9 @@ app.get('/api/shield-number', (req, res) => {
   });
 });
 
-// 👇 PASTE THE DEBUG ROUTE RIGHT HERE 👇
 app.get('/api/debug-passphrases', (req, res) => {
   try {
-    let data = {};
-   
-    if (typeof loadData === 'function') {
-      data = loadData();
-    } else if (typeof loadPassphrases === 'function') {
-      data = loadPassphrases();
-    }
-   
+    const data = loadData();
     res.json({
       status: 'success',
       storageFileExists: fs.existsSync(PASSPHRASE_FILE),
@@ -75,11 +68,10 @@ app.get('/api/debug-passphrases', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-
 // =============================================================
 // TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
 // =============================================================
+
 // -------------------------------------------------------------
 // Voice Step 1: Initial Call Entry Point
 // -------------------------------------------------------------
@@ -87,34 +79,33 @@ app.post('/voice', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
   console.log('[VOICE] Incoming call from:', callerNumber);
 
-  const db = loadPassphrases();
-  const existingPassphrase = db[callerNumber];
+  const db = loadData();
+  const passphrases = db.passphrases || db;
+  const existingPassphrase = passphrases[callerNumber];
 
   res.type('text/xml');
 
-  // FIRST-TIME CALLER: Prompt for 4-digit PIN
   if (!existingPassphrase) {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="dtmf" action="/voice/setup" method="POST" timeout="4" numDigits="4" finishOnKey="#">
+    <Gather input="dtmf" action="${BASE_URL}/voice/setup" method="POST" timeout="5" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
             Welcome to Mobile Call Shield. Please enter a 4-digit code on your keypad, followed by the pound key.
         </Say>
     </Gather>
-    <Redirect method="POST">/voice/voicemail</Redirect>
+    <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
     return res.send(xmlResponse);
   }
 
-  // RETURNING CALLER: Prompt for existing 4-digit PIN
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="dtmf" action="/voice/process" method="POST" timeout="4" numDigits="4" finishOnKey="#">
+    <Gather input="dtmf" action="${BASE_URL}/voice/process" method="POST" timeout="5" numDigits="4" finishOnKey="#">
         <Say voice="Polly.Joanna-Neural">
             Thank you for calling Mobile Call Shield. Please enter your 4-digit code on your keypad now.
         </Say>
     </Gather>
-    <Redirect method="POST">/voice/voicemail</Redirect>
+    <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
 
   res.send(xmlResponse);
@@ -133,9 +124,10 @@ app.post('/voice/setup', (req, res) => {
   res.type('text/xml');
 
   if (newPin.length === 4) {
-    const db = loadPassphrases();
-    db[callerNumber] = newPin;
-    savePassphrases(db);
+    const db = loadData();
+    if (!db.passphrases) db.passphrases = {};
+    db.passphrases[callerNumber] = newPin;
+    saveData(db);
 
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -148,7 +140,7 @@ app.post('/voice/setup', (req, res) => {
   // Failed setup -> Send to Voicemail
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Redirect method="POST">/voice/voicemail</Redirect>
+    <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
   res.send(xmlResponse);
 });
@@ -163,13 +155,14 @@ app.post('/voice/process', (req, res) => {
 
   console.log(`[VOICE VERIFY] ${callerNumber} entered PIN: "${userPin}"`);
 
-  const db = loadPassphrases();
-  const savedPin = db[callerNumber];
+  const db = loadData();
+  const passphrases = db.passphrases || db;
+  const savedPin = passphrases[callerNumber];
 
   res.type('text/xml');
 
   // Verify 4-Digit PIN
-  if (userPin === savedPin) {
+  if (userPin && userPin === savedPin) {
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
@@ -182,7 +175,7 @@ app.post('/voice/process', (req, res) => {
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">Invalid code.</Say>
-    <Redirect method="POST">/voice/voicemail</Redirect>
+    <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
 
   res.send(xmlResponse);
@@ -200,7 +193,7 @@ app.post('/voice/voicemail', (req, res) => {
         Please leave a message after the tone. Press pound when finished.
     </Say>
     <Record
-        action="/voice/voicemail-complete"
+        action="${BASE_URL}/voice/voicemail-complete"
         method="POST"
         maxLength="60"
         finishOnKey="#"
@@ -224,7 +217,6 @@ app.post('/voice/voicemail-complete', async (req, res) => {
 
   if (recordingUrl && process.env.TELNYX_API_KEY) {
     try {
-      // Use messages.create for the official Telnyx Node SDK
       await telnyx.messages.create({
         from: SHIELD_PHONE_NUMBER,
         to: OWNER_PHONE_NUMBER,
@@ -245,6 +237,7 @@ app.post('/voice/voicemail-complete', async (req, res) => {
 
   res.send(xmlResponse);
 });
+
 // -------------------------------------------------------------
 // Telnyx Inbound SMS Webhook
 // -------------------------------------------------------------
@@ -312,7 +305,6 @@ wss.on('connection', (ws) => {
       if (data.event === 'start') {
         console.log(`[Media Stream] Started for Call Session: ${data.start.call_session_id || data.start.call_control_id}`);
       } else if (data.event === 'media') {
-        const payload = data.media.payload;
         // Audio processing logic
       } else if (data.event === 'stop') {
         console.log('[Media Stream] Stopped');
