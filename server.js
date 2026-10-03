@@ -55,9 +55,26 @@ app.get('/api/shield-number', (req, res) => {
 
 // 👇 PASTE THE DEBUG ROUTE RIGHT HERE 👇
 app.get('/api/debug-passphrases', (req, res) => {
-  const db = loadData(); // or loadPassphrases() depending on your function name
-  res.json(db);
+  try {
+    let data = {};
+   
+    if (typeof loadData === 'function') {
+      data = loadData();
+    } else if (typeof loadPassphrases === 'function') {
+      data = loadPassphrases();
+    }
+   
+    res.json({
+      status: 'success',
+      storageFileExists: fs.existsSync(PASSPHRASE_FILE),
+      data: data
+    });
+  } catch (err) {
+    console.error('[DEBUG ERROR]', err);
+    res.status(500).json({ status: 'error', error: err.message });
+  }
 });
+
 // -------------------------------------------------------------
 
 // =============================================================
