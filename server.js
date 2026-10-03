@@ -44,7 +44,7 @@ function savePassphrases(data) {
 // 1. Health Check & Config Endpoints
 // -------------------------------------------------------------
 app.get('/', (req, res) => {
-  res.send('Senior Scam Shield Backend (Telnyx) Active');
+  res.send('Mobile Call Shield Backend (Telnyx) Active');
 });
 
 app.get('/api/shield-number', (req, res) => {
@@ -53,10 +53,16 @@ app.get('/api/shield-number', (req, res) => {
   });
 });
 
+// 👇 PASTE THE DEBUG ROUTE RIGHT HERE 👇
+app.get('/api/debug-passphrases', (req, res) => {
+  const db = loadData(); // or loadPassphrases() depending on your function name
+  res.json(db);
+});
+// -------------------------------------------------------------
+
 // =============================================================
 // TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
 // =============================================================
-
 // -------------------------------------------------------------
 // Voice Step 1: Initial Call Entry Point
 // -------------------------------------------------------------
