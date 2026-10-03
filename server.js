@@ -19,26 +19,45 @@ const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
 const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://mobile-call-shield.onrender.com';
 
-// Local JSON file to store passphrases per caller phone number
+// Local JSON file to store settings and contacts
 const PASSPHRASE_FILE = path.join(__dirname, 'passphrases.json');
 
+// -------------------------------------------------------------
+// Data Helper Functions (Structured JSON Model)
+// -------------------------------------------------------------
 function loadData() {
   try {
     if (fs.existsSync(PASSPHRASE_FILE)) {
-      return JSON.parse(fs.readFileSync(PASSPHRASE_FILE, 'utf8'));
+      const raw = fs.readFileSync(PASSPHRASE_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      return {
+        settings: parsed.settings || { ownerPhoneNumber: OWNER_PHONE_NUMBER, alertsEnabled: true },
+        contacts: parsed.contacts || parsed.passphrases || {}
+      };
     }
   } catch (err) {
-    console.error('Error reading passphrases file:', err);
+    console.error('[STORAGE] Error reading JSON data:', err.message);
   }
-  return { passphrases: {}, settings: {} };
+  return {
+    settings: { ownerPhoneNumber: OWNER_PHONE_NUMBER, alertsEnabled: true },
+    contacts: {}
+  };
 }
 
 function saveData(data) {
   try {
     fs.writeFileSync(PASSPHRASE_FILE, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
-    console.error('Error saving passphrases file:', err);
+    console.error('[STORAGE] Error saving JSON data:', err.message);
   }
+}
+
+// Safely gets PIN string regardless of legacy or object format
+function getSavedPin(contacts, callerNumber) {
+  const entry = contacts[callerNumber];
+  if (!entry) return null;
+  if (typeof entry === 'string') return entry;
+  return entry.pin || null;
 }
 
 // -------------------------------------------------------------
@@ -60,6 +79,7 @@ app.get('/api/debug-passphrases', (req, res) => {
     res.json({
       status: 'success',
       storageFileExists: fs.existsSync(PASSPHRASE_FILE),
+      totalContacts: Object.keys(data.contacts).length,
       data: data
     });
   } catch (err) {
@@ -72,7 +92,7 @@ app.get('/api/debug-passphrases', (req, res) => {
 // TELNYX INBOUND VOICE ROUTES & PASSPHRASE MANAGEMENT
 // =============================================================
 
-/ -------------------------------------------------------------
+// -------------------------------------------------------------
 // Voice Step 1: Initial Call Entry Point
 // -------------------------------------------------------------
 app.post('/voice', (req, res) => {
@@ -80,14 +100,12 @@ app.post('/voice', (req, res) => {
   console.log('[VOICE] Incoming call from:', callerNumber);
 
   const db = loadData();
-  const passphrases = db.passphrases || {};
-  // Ensure existingPassphrase is a string value, not an object
-  const existingPassphrase = typeof passphrases[callerNumber] === 'string' ? passphrases[callerNumber] : null;
+  const existingPin = getSavedPin(db.contacts, callerNumber);
 
   res.type('text/xml');
 
   // FIRST-TIME CALLER: Route to /voice/setup to create and save a PIN
-  if (!existingPassphrase) {
+  if (!existingPin) {
     console.log(`[VOICE] New caller ${callerNumber} -> Routing to /voice/setup`);
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -116,13 +134,12 @@ app.post('/voice', (req, res) => {
   res.send(xmlResponse);
 });
 
-
 // -------------------------------------------------------------
 // Voice Step 2: Setup / Change Passphrase (4-Digit PIN)
 // -------------------------------------------------------------
 app.post('/voice/setup', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const digits = req.body?.Digits || '';
+  const digits = req.body?.Digits || req.body?.digits || '';
   const newPin = digits.trim();
 
   console.log(`[VOICE SETUP] ${callerNumber} set PIN: "${newPin}"`);
@@ -131,8 +148,11 @@ app.post('/voice/setup', (req, res) => {
 
   if (newPin.length === 4) {
     const db = loadData();
-    if (!db.passphrases) db.passphrases = {};
-    db.passphrases[callerNumber] = newPin;
+    db.contacts[callerNumber] = {
+      pin: newPin,
+      allowed: true,
+      updatedAt: new Date().toISOString()
+    };
     saveData(db);
 
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
@@ -156,14 +176,13 @@ app.post('/voice/setup', (req, res) => {
 // -------------------------------------------------------------
 app.post('/voice/process', (req, res) => {
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const digits = req.body?.Digits || '';
+  const digits = req.body?.Digits || req.body?.digits || '';
   const userPin = digits.trim();
 
-  console.log(`[VOICE VERIFY] ${callerNumber} entered PIN: "${userPin}"`);
-
   const db = loadData();
-  const passphrases = db.passphrases || db;
-  const savedPin = passphrases[callerNumber];
+  const savedPin = getSavedPin(db.contacts, callerNumber);
+
+  console.log(`[VOICE VERIFY] ${callerNumber} entered PIN: "${userPin}" (Saved: "${savedPin}")`);
 
   res.type('text/xml');
 
