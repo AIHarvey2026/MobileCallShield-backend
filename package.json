@@ -1,7 +1,7 @@
 {
-  "name": "seniorscamshield-backend",
+  "name": "mobilecallshield-backend",
   "version": "1.0.0",
-  "description": "Backend service for SeniorScamShield PSTN gateway and AI monitoring",
+  "description": "Backend service for Senior Scam Shield PSTN gateway and AI monitoring",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -9,9 +9,10 @@
   },
   "dependencies": {
     "body-parser": "^1.20.2",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^4.19.2",
-    "telnyx": "^7.24.0",
+    "pg": "^8.23.1",
+    "telnyx": "^7.0.0",
     "twilio": "^5.0.0",
     "ws": "^8.16.0"
   }
