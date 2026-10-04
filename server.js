@@ -257,32 +257,39 @@ app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const userRes = await pool.query(
-      `SELECT u.id, u.email, u.password_hash, u.owner_phone, u.status, p.shield_number 
-       FROM users u
-       LEFT JOIN phone_numbers p ON u.id = p.user_id
-       WHERE u.email = $1;`,
-      [email]
+    console.log(`[AUTH] Login attempt for: ${email}`);
+
+    // Query targeting correct pool connection and password_hash column
+    const userResult = await pool.query(
+      'SELECT id, email, password_hash, role, status FROM users WHERE email = $1',
+      [email ? email.trim() : '']
     );
 
-    if (userRes.rows.length === 0 || userRes.rows[0].password_hash !== password) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+    if (userResult.rows.length === 0) {
+      console.log(`[AUTH] User not found: ${email}`);
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    const user = userRes.rows[0];
-    res.json({
+    const user = userResult.rows[0];
+
+    // Validate password against password_hash column
+    if (user.password_hash !== (password ? password.trim() : '')) {
+      console.log(`[AUTH] Invalid password attempt for: ${email}`);
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    console.log(`[AUTH] Login successful for: ${email}`);
+    res.status(200).json({
       message: 'Login successful',
-      user: {
-        id: user.id,
-        email: user.email,
-        ownerPhone: user.owner_phone,
-        shieldNumber: user.shield_number || null,
-        status: user.status
-      }
+      user: { id: user.id, email: user.email, role: user.role }
     });
+
   } catch (err) {
-    console.error('[AUTH LOGIN ERROR]', err.message);
-    res.status(500).json({ error: 'Internal server error.' });
+    console.error('❌ [AUTH ERROR]:', err.message);
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      details: err.message 
+    });
   }
 });
 
@@ -350,29 +357,38 @@ app.delete('/api/contacts/:contactId', async (req, res) => {
 // -------------------------------------------------------------
 
 app.post('/voice', async (req, res) => {
-  const calledNumber = req.body?.To || req.body?.to || req.body?.data?.payload?.to || SHIELD_PHONE_NUMBER;
-  const callerNumber = req.body?.From || req.body?.from || req.body?.data?.payload?.from || 'Unknown';
-
-  console.log(`[VOICE] Incoming call To: ${calledNumber} | From: ${callerNumber}`);
+  const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
   res.type('text/xml');
 
   try {
+    // Save call log record
+    await pool.query(
+      `INSERT INTO call_logs (call_uuid, from_number, origin_city, origin_state, to_number)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (call_uuid) DO NOTHING`,
+      [req.body?.CallSid || `call-${Date.now()}`, callerNumber, 'Unknown', 'Unknown', calledNumber]
+    ).catch(e => console.error('Call log error:', e.message));
+
+    // Look up assigned user
     const userResult = await pool.query(
-      `SELECT user_id FROM phone_numbers WHERE shield_number = $1 AND status = 'assigned'`,
+      `SELECT u.id FROM users u 
+       JOIN phone_numbers p ON u.id = p.user_id 
+       WHERE p.shield_number = $1`,
       [calledNumber]
     );
 
     if (userResult.rows.length === 0) {
-      console.log(`[UNASSIGNED NUMBER] No active account for ${calledNumber}`);
+      console.log(`[VOICE] Unassigned shield number: ${calledNumber}`);
       const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">This shield number is currently unassigned. Goodbye.</Say>
+    <Say voice="Polly.Joanna-Neural">This number is not yet configured. Goodbye.</Say>
     <Hangup/>
 </Response>`;
       return res.send(xmlResponse);
     }
 
-    const userId = userResult.rows[0].user_id;
+    const userId = userResult.rows[0].id;
 
     const contactResult = await pool.query(
       `SELECT pin_code, is_allowed FROM contacts WHERE user_id = $1 AND caller_number = $2`,
@@ -406,7 +422,7 @@ app.post('/voice', async (req, res) => {
     return res.send(xmlResponse);
 
   } catch (err) {
-    console.error('[VOICE DB ERROR]', err);
+    console.error('[VOICE DB ERROR]', err.message);
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna-Neural">An error occurred while processing your call. Goodbye.</Say>
@@ -454,7 +470,7 @@ app.post('/voice/setup', async (req, res) => {
         return res.send(xmlResponse);
       }
     } catch (err) {
-      console.error('[SETUP DB ERROR]', err);
+      console.error('[SETUP DB ERROR]', err.message);
     }
   }
 
@@ -498,7 +514,7 @@ app.post('/voice/process', async (req, res) => {
       }
     }
   } catch (err) {
-    console.error('[VERIFY DB ERROR]', err);
+    console.error('[VERIFY DB ERROR]', err.message);
   }
 
   console.log(`[VERIFY FAILED] Invalid PIN from ${callerNumber}`);
@@ -588,7 +604,17 @@ app.post('/sms', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 6. WebSocket Server for Live Audio Screening
+// 6. Global Error Handling Middleware (Central Error Trap)
+// -------------------------------------------------------------
+app.use((err, req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.error(`[${timestamp}] ❌ UNHANDLED SERVER ERROR:`, err.message);
+  console.error(err.stack);
+  res.status(500).json({ error: 'Internal Server Error', message: err.message });
+});
+
+// -------------------------------------------------------------
+// 7. WebSocket Server for Live Audio Screening
 // -------------------------------------------------------------
 wss.on('connection', (ws) => {
   console.log('[Media Stream] WebSocket client connected');
@@ -610,7 +636,7 @@ wss.on('connection', (ws) => {
 });
 
 // -------------------------------------------------------------
-// 7. Start Unified HTTP & WebSocket Server
+// 8. Start Unified HTTP & WebSocket Server
 // -------------------------------------------------------------
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
