@@ -304,7 +304,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ [AUTH ERROR]:', err.message);
+    console.error('❌ [AUTH LOGIN ERROR]:', err.message);
     res.status(500).json({ 
       error: 'Internal Server Error', 
       details: err.message 
@@ -682,4 +682,3 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
