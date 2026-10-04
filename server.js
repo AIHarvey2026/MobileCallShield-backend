@@ -32,6 +32,17 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// Ensure database columns are set up on server startup
+pool.query(`
+  ALTER TABLE users 
+  ADD COLUMN IF NOT EXISTS guardian_code VARCHAR(10) DEFAULT '1234',
+  ADD COLUMN IF NOT EXISTS is_exempt BOOLEAN DEFAULT FALSE;
+`).then(() => {
+  console.log('✅ [DB CHECK] guardian_code and is_exempt columns verified/added');
+}).catch(err => {
+  console.error('❌ [DB ERROR] Column update failed:', err.message);
+});
+
 // Configuration Defaults
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
@@ -145,19 +156,29 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         if (subRes.rows.length > 0) {
           const userId = subRes.rows[0].user_id;
 
-          await client.query(
-            `UPDATE users SET status = 'canceled' WHERE id = $1;`,
+          // Check if user is family exempt before disabling
+          const userCheck = await client.query(
+            `SELECT is_exempt FROM users WHERE id = $1;`,
             [userId]
           );
 
-          await client.query(
-            `UPDATE phone_numbers 
-             SET status = 'unassigned', user_id = NULL, assigned_at = NULL 
-             WHERE user_id = $1;`,
-            [userId]
-          );
+          if (userCheck.rows.length > 0 && userCheck.rows[0].is_exempt) {
+            console.log(`[STRIPE] User ${userId} is marked as exempt. Skipping status revocation.`);
+          } else {
+            await client.query(
+              `UPDATE users SET status = 'canceled' WHERE id = $1;`,
+              [userId]
+            );
 
-          console.log(`[RECLAIM] Returned shield number for user ${userId} back to unassigned pool.`);
+            await client.query(
+              `UPDATE phone_numbers 
+               SET status = 'unassigned', user_id = NULL, assigned_at = NULL 
+               WHERE user_id = $1;`,
+              [userId]
+            );
+
+            console.log(`[RECLAIM] Returned shield number for user ${userId} back to unassigned pool.`);
+          }
         }
 
         await client.query('COMMIT');
@@ -192,7 +213,7 @@ app.get('/api/shield-number', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. REST API ENDPOINTS FOR ANDROID APP (Auth & Contacts)
+// 3. REST API ENDPOINTS FOR ANDROID APP & ADMIN (Auth, Contacts, Guardian, Exemptions)
 // -------------------------------------------------------------
 
 app.post('/api/auth/register', async (req, res) => {
@@ -259,7 +280,6 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     console.log(`[AUTH] Login attempt for: ${email}`);
 
-    // Query targeting correct pool connection and password_hash column
     const userResult = await pool.query(
       'SELECT id, email, password_hash, role, status FROM users WHERE email = $1',
       [email ? email.trim() : '']
@@ -272,7 +292,6 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // Validate password against password_hash column
     if (user.password_hash !== (password ? password.trim() : '')) {
       console.log(`[AUTH] Invalid password attempt for: ${email}`);
       return res.status(401).json({ message: 'Invalid email or password' });
@@ -290,6 +309,60 @@ app.post('/api/auth/login', async (req, res) => {
       error: 'Internal Server Error', 
       details: err.message 
     });
+  }
+});
+
+// Verify Guardian Unlock Code Endpoint
+app.post('/api/verify-guardian-code', async (req, res) => {
+  const { user_id, guardian_code } = req.body;
+
+  if (!user_id || !guardian_code) {
+    return res.status(400).json({ error: 'user_id and guardian_code are required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT guardian_code FROM users WHERE id = $1',
+      [user_id]
+    );
+
+    if (result.rows.length > 0 && result.rows[0].guardian_code === guardian_code) {
+      res.status(200).json({ success: true, message: 'Unlocked successfully' });
+    } else {
+      res.status(401).json({ success: false, error: 'Invalid Guardian Code' });
+    }
+  } catch (err) {
+    console.error('❌ [GUARDIAN CODE ERROR]:', err.message);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});
+
+// Admin Toggle Family Exemption Endpoint
+app.post('/api/admin/toggle-exempt', async (req, res) => {
+  const { user_id, is_exempt } = req.body;
+
+  if (!user_id || typeof is_exempt !== 'boolean') {
+    return res.status(400).json({ error: 'user_id and is_exempt boolean are required' });
+  }
+
+  try {
+    const newStatus = is_exempt ? 'active' : 'trialing';
+
+    await pool.query(
+      `UPDATE users 
+       SET is_exempt = $1, status = $2 
+       WHERE id = $3;`,
+      [is_exempt, newStatus, user_id]
+    );
+
+    console.log(`[ADMIN] Set user ${user_id} exemption status to: ${is_exempt}`);
+    res.status(200).json({ 
+      success: true, 
+      message: `User family exemption set to ${is_exempt}` 
+    });
+  } catch (err) {
+    console.error('❌ [ADMIN EXEMPT ERROR]:', err.message);
+    res.status(500).json({ error: 'Failed to update user exemption status.' });
   }
 });
 
@@ -312,10 +385,18 @@ app.get('/api/contacts/:userId', async (req, res) => {
 });
 
 app.post('/api/contacts', async (req, res) => {
-  const { user_id, caller_number, pin_code, is_allowed } = req.body;
+  let { user_id, caller_number, pin_code, is_allowed } = req.body;
 
   if (!user_id || !caller_number || !pin_code) {
     return res.status(400).json({ error: 'user_id, caller_number, and pin_code are required.' });
+  }
+
+  // Format caller_number to E.164 (+1XXXXXXXXXX)
+  let cleanedNumber = caller_number.replace(/\D/g, '');
+  if (cleanedNumber.length === 10) {
+    cleanedNumber = `+1${cleanedNumber}`;
+  } else if (!cleanedNumber.startsWith('+')) {
+    cleanedNumber = `+${cleanedNumber}`;
   }
 
   try {
@@ -327,7 +408,7 @@ app.post('/api/contacts', async (req, res) => {
                      is_allowed = EXCLUDED.is_allowed, 
                      updated_at = CURRENT_TIMESTAMP
        RETURNING *;`,
-      [user_id, caller_number, pin_code, is_allowed ?? true]
+      [user_id, cleanedNumber, pin_code, is_allowed ?? true]
     );
 
     res.status(200).json({
@@ -336,7 +417,7 @@ app.post('/api/contacts', async (req, res) => {
     });
   } catch (err) {
     console.error('[SAVE CONTACT ERROR]', err.message);
-    res.status(500).json({ error: 'Failed to save contact.' });
+    res.status(500).json({ error: 'Failed to save contact.', details: err.message });
   }
 });
 
