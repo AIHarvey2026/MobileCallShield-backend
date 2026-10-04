@@ -490,6 +490,7 @@ app.post('/voice', async (req, res) => {
       return res.send(xmlResponse);
     }
 
+
     console.log(`[VOICE] Returning caller ${callerNumber} -> Routing to /voice/process`);
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -513,6 +514,7 @@ app.post('/voice', async (req, res) => {
   }
 });
 
+
 app.post('/voice/setup', async (req, res) => {
   const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
   const callerNumber = req.body?.From || req.body?.from || 'Unknown';
@@ -521,8 +523,8 @@ app.post('/voice/setup', async (req, res) => {
   console.log(`[VOICE SETUP] ${callerNumber} entering PIN: "${digits}"`);
   res.type('text/xml');
 
-  if (digits.length === 4) {
-    try {
+  try {
+    if (digits.length === 4) {
       const userResult = await pool.query(
         `SELECT u.id, u.owner_phone FROM users u 
          JOIN phone_numbers p ON u.id = p.user_id 
@@ -550,62 +552,19 @@ app.post('/voice/setup', async (req, res) => {
 </Response>`;
         return res.send(xmlResponse);
       }
-    } catch (err) {
-      console.error('[SETUP DB ERROR]', err.message);
-    }
-  }
-
-  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
-</Response>`;
-  res.send(xmlResponse);
-});
-
-app.post('/voice/process', async (req, res) => {
-  const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
-  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
-  const userPin = (req.body?.Digits || req.body?.digits || '').trim();
-
-  res.type('text/xml');
-
-  try {
-    const contactResult = await pool.query(
-      `SELECT c.pin_code, u.owner_phone 
-       FROM contacts c
-       JOIN users u ON c.user_id = u.id
-       JOIN phone_numbers p ON u.id = p.user_id
-       WHERE p.shield_number = $1 AND c.caller_number = $2`,
-      [calledNumber, callerNumber]
-    );
-
-    if (contactResult.rows.length > 0) {
-      const { pin_code, owner_phone } = contactResult.rows[0];
-
-      if (userPin === pin_code) {
-        const targetPhone = owner_phone || OWNER_PHONE_NUMBER;
-        console.log(`[VERIFY SUCCESS] PIN verified for ${callerNumber}. Dialing owner ${targetPhone}`);
-
-        const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="Polly.Joanna-Neural">Code verified. Connecting your call now.</Say>
-    <Dial timeout="20" callerId="${callerNumber}">${targetPhone}</Dial>
-</Response>`;
-        return res.send(xmlResponse);
-      }
     }
   } catch (err) {
-    console.error('[VERIFY DB ERROR]', err.message);
+    console.error('[SETUP DB ERROR]', err.message);
+    console.error('[SAVE CONTACT ERROR]:', err);
   }
 
-  console.log(`[VERIFY FAILED] Invalid PIN from ${callerNumber}`);
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">Invalid code.</Say>
     <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
 </Response>`;
   res.send(xmlResponse);
 });
+
 
 app.post('/voice/voicemail', (req, res) => {
   res.type('text/xml');
@@ -723,3 +682,4 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
