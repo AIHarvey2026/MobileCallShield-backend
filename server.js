@@ -114,7 +114,7 @@ pool.query(`
 
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
-const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://mobile-call-shield.onrender.com';
+const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://mobilecallshield-backend.onrender.com';
 
 app.use(express.urlencoded({ extended: true }));
 
