@@ -42,24 +42,48 @@ const catchAsync = fn => {
 };
 
 // -------------------------------------------------------------
-// 2. DETAILED REQUEST & RESPONSE LOGGER (No more guessing)
+// 2. DETAILED ULTRA-VERBOSE REQUEST & RESPONSE LOGGER
 // -------------------------------------------------------------
 app.use((req, res, next) => {
   const start = Date.now();
+  
+  // Capture original res.json and res.send to log outgoing response bodies
+  let responseBody = '';
+  const originalJson = res.json;
+  res.json = function (body) {
+    responseBody = body;
+    return originalJson.apply(this, arguments);
+  };
+
   res.on('finish', () => {
     const duration = Date.now() - start;
-    console.log(JSON.stringify({
+    
+    // Build a comprehensive log object containing everything
+    const detailedLog = {
       timestamp: new Date().toISOString(),
+      type: 'HTTP_TRANSACTION',
       method: req.method,
       path: req.path,
       status: res.statusCode,
       durationMs: duration,
+      headers: {
+        contentType: req.headers['content-type'],
+        userAgent: req.headers['user-agent'],
+        authorization: req.headers['authorization'] ? '[PRESENT]' : '[NONE]'
+      },
       query: req.query,
-      body: req.method === 'POST' ? { ...req.body, password: req.body.password ? '[HIDDEN]' : undefined } : undefined
-    }));
+      params: req.params,
+      // Temporarily showing the raw password/body so you can see exact matching data
+      requestBody: req.body, 
+      responseSummary: responseBody
+    };
+
+    console.log(JSON.stringify(detailedLog, null, 2));
   });
+
   next();
 });
+
 
 // Initialize PostgreSQL Connection Pool
 const pool = new Pool({
