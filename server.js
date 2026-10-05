@@ -143,17 +143,17 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   );
 
   if (userResult.rows.length === 0) {
-    console.log(`[AUTH LOGIN FAILED] Email not found in database: "$1"`);
+    console.log(`[AUTH LOGIN FAILED] Email not found in database: "${email}"`);
     return next(new AppError('Invalid email or password', 401));
   }
 
   const user = userResult.rows[0];
-  const storedPassword = user.password_hash || '';
+  const storedPassword = user.password || '';
   const inputPassword = password ? password.trim() : '';
 
   if (storedPassword !== inputPassword) {
     console.log(`[AUTH LOGIN FAILED] Password mismatch for user: "${email}"`);
-    return next(new AppError('Invalid email or password', "${email}",(401));
+    return next(new AppError('Invalid email or password', 401));
   }
 
   console.log(`[AUTH LOGIN SUCCESS] User logged in: "${email}"`);
