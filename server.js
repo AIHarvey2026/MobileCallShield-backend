@@ -133,19 +133,23 @@ app.get('/', (req, res) => {
   res.send('Mobile Call Shield Backend Active');
 });
 
+// Login Endpoint
 app.post('/api/auth/login', catchAsync(async (req, res, next) => {
-  // 1. Raw dump to prove the request hit the server immediately
   console.log('--------------------------------------------------');
   console.log('🚨 [INCOMING LOGIN REQUEST RAW HEADERS]:', JSON.stringify(req.headers, null, 2));
   console.log('🚨 [INCOMING LOGIN REQUEST RAW BODY]:', JSON.stringify(req.body, null, 2));
   console.log('--------------------------------------------------');
 
   const { email, password } = req.body || {};
-  console.log(`[AUTH LOGIN ATTEMPT] Extracted email: "${email}" | Password Length: ${password ? password.length : 0}`);
+  if (!email || !password) {
+    return next(new AppError('Email and password are required', 400));
+  }
+
+  console.log(`[AUTH LOGIN ATTEMPT] Extracted email: "${email}" | Password Length: ${password.length}`);
 
   const userResult = await pool.query(
     'SELECT id, email, password, role, status FROM users WHERE email = $1',
-    [email ? email.trim() : '']
+    [email.trim()]
   );
 
   if (userResult.rows.length === 0) {
@@ -155,7 +159,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
 
   const user = userResult.rows[0];
   const storedPassword = user.password || '';
-  const inputPassword = password ? password.trim() : '';
+  const inputPassword = password.trim();
 
   if (storedPassword !== inputPassword) {
     console.log(`[AUTH LOGIN FAILED] Password mismatch for user: "${email}"`);
@@ -166,6 +170,26 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   res.status(200).json({
     message: 'Login successful',
     user: { id: user.id, email: user.email, role: user.role || 'user' }
+  });
+}));
+
+// Save / Update Identity Contacts Endpoint
+app.post('/api/contacts', catchAsync(async (req, res, next) => {
+  console.log('--------------------------------------------------');
+  console.log('🚨 [INCOMING CONTACTS REQUEST RAW BODY]:', JSON.stringify(req.body, null, 2));
+  console.log('--------------------------------------------------');
+
+  const { userId, contacts } = req.body || {};
+
+  if (!userId) {
+    return next(new AppError('User ID is required', 400));
+  }
+
+  console.log(`[CONTACTS SAVE] Received ${Array.isArray(contacts) ? contacts.length : 'some'} contacts for user: ${userId}`);
+
+  res.status(200).json({
+    message: 'Contacts saved successfully',
+    receivedCount: Array.isArray(contacts) ? contacts.length : 0
   });
 }));
 
