@@ -47,7 +47,6 @@ const catchAsync = fn => {
 app.use((req, res, next) => {
   const start = Date.now();
   
-  // Capture original res.json and res.send to log outgoing response bodies
   let responseBody = '';
   const originalJson = res.json;
   res.json = function (body) {
@@ -58,7 +57,6 @@ app.use((req, res, next) => {
   res.on('finish', () => {
     const duration = Date.now() - start;
     
-    // Build a comprehensive log object containing everything
     const detailedLog = {
       timestamp: new Date().toISOString(),
       type: 'HTTP_TRANSACTION',
@@ -73,7 +71,6 @@ app.use((req, res, next) => {
       },
       query: req.query,
       params: req.params,
-      // Temporarily showing the raw password/body so you can see exact matching data
       requestBody: req.body, 
       responseSummary: responseBody
     };
@@ -84,12 +81,26 @@ app.use((req, res, next) => {
   next();
 });
 
-
-// Initialize PostgreSQL Connection Pool
+// -------------------------------------------------------------
+// 3. DATABASE CONNECTION & QUERY LOGGER
+// -------------------------------------------------------------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
+
+// Automatically log every SQL query and its parameters
+const originalPoolQuery = pool.query;
+pool.query = async (text, params) => {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    type: 'DB_QUERY',
+    query: text.trim().replace(/\s+/g, ' '),
+    parameters: params || []
+  }, null, 2));
+  
+  return originalPoolQuery.apply(pool, [text, params]);
+};
 
 pool.query(`
   ALTER TABLE users 
@@ -109,14 +120,13 @@ app.use(express.urlencoded({ extended: true }));
 
 // Stripe Webhook (Raw body)
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  // (Keeping existing Stripe logic intact)
   res.json({ received: true });
 });
 
 app.use(express.json());
 
 // -------------------------------------------------------------
-// 3. API ENDPOINTS WITH CENTRALIZED ERROR CATCHING
+// 4. API ENDPOINTS WITH CENTRALIZED ERROR CATCHING
 // -------------------------------------------------------------
 
 app.get('/', (req, res) => {
@@ -153,16 +163,13 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   });
 }));
 
-// (Other routes can use catchAsync as well to capture database errors automatically)
-
 // -------------------------------------------------------------
-// 4. GLOBAL CENTRALIZED ERROR-HANDLING MIDDLEWARE (Must be last)
+// 5. GLOBAL CENTRALIZED ERROR-HANDLING MIDDLEWARE (Must be last)
 // -------------------------------------------------------------
 app.use((err, req, res, next) => {
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
 
-  // This guarantees EVERY error prints a full stack trace and JSON payload in Render
   console.error(JSON.stringify({
     timestamp: new Date().toISOString(),
     level: 'FATAL_OR_OPERATIONAL_ERROR',
