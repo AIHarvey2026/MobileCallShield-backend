@@ -156,7 +156,6 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         if (subRes.rows.length > 0) {
           const userId = subRes.rows[0].user_id;
 
-          // Check if user is family exempt before disabling
           const userCheck = await client.query(
             `SELECT is_exempt FROM users WHERE id = $1;`,
             [userId]
@@ -213,7 +212,7 @@ app.get('/api/shield-number', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 3. REST API ENDPOINTS FOR ANDROID APP & ADMIN (Auth, Contacts, Guardian, Exemptions)
+// 3. REST API ENDPOINTS FOR ANDROID APP & ADMIN
 // -------------------------------------------------------------
 
 app.post('/api/auth/register', async (req, res) => {
@@ -275,13 +274,14 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
 
   try {
     console.log(`[AUTH] Login attempt for: ${email}`);
 
+    // Fetch user and check both password_hash and password columns for maximum database compatibility
     const userResult = await pool.query(
-      'SELECT id, email, password_hash, role, status FROM users WHERE email = $1',
+      'SELECT id, email, password_hash, password, role, status FROM users WHERE email = $1',
       [email ? email.trim() : '']
     );
 
@@ -291,8 +291,9 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const user = userResult.rows[0];
+    const storedPassword = user.password_hash || user.password || '';
 
-    if (user.password_hash !== (password ? password.trim() : '')) {
+    if (storedPassword !== (password ? password.trim() : '')) {
       console.log(`[AUTH] Invalid password attempt for: ${email}`);
       return res.status(401).json({ message: 'Invalid email or password' });
     }
@@ -300,11 +301,12 @@ app.post('/api/auth/login', async (req, res) => {
     console.log(`[AUTH] Login successful for: ${email}`);
     res.status(200).json({
       message: 'Login successful',
-      user: { id: user.id, email: user.email, role: user.role }
+      user: { id: user.id, email: user.email, role: user.role || 'user' }
     });
 
   } catch (err) {
     console.error('❌ [AUTH LOGIN ERROR]:', err.message);
+    console.error(err.stack);
     res.status(500).json({ 
       error: 'Internal Server Error', 
       details: err.message 
@@ -391,7 +393,6 @@ app.post('/api/contacts', async (req, res) => {
     return res.status(400).json({ error: 'user_id, caller_number, and pin_code are required.' });
   }
 
-  // Format caller_number to E.164 (+1XXXXXXXXXX)
   let cleanedNumber = caller_number.replace(/\D/g, '');
   if (cleanedNumber.length === 10) {
     cleanedNumber = `+1${cleanedNumber}`;
@@ -443,7 +444,6 @@ app.post('/voice', async (req, res) => {
   res.type('text/xml');
 
   try {
-    // Save call log record
     await pool.query(
       `INSERT INTO call_logs (call_uuid, from_number, origin_city, origin_state, to_number)
        VALUES ($1, $2, $3, $4, $5)
@@ -451,7 +451,6 @@ app.post('/voice', async (req, res) => {
       [req.body?.CallSid || `call-${Date.now()}`, callerNumber, 'Unknown', 'Unknown', calledNumber]
     ).catch(e => console.error('Call log error:', e.message));
 
-    // Look up assigned user
     const userResult = await pool.query(
       `SELECT u.id FROM users u 
        JOIN phone_numbers p ON u.id = p.user_id 
@@ -490,7 +489,6 @@ app.post('/voice', async (req, res) => {
       return res.send(xmlResponse);
     }
 
-
     console.log(`[VOICE] Returning caller ${callerNumber} -> Routing to /voice/process`);
     const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -514,6 +512,54 @@ app.post('/voice', async (req, res) => {
   }
 });
 
+// Added missing /voice/process route for returning callers
+app.post('/voice/process', async (req, res) => {
+  const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
+  const callerNumber = req.body?.From || req.body?.from || 'Unknown';
+  const digits = (req.body?.Digits || req.body?.digits || '').trim();
+
+  console.log(`[VOICE PROCESS] Returning caller ${callerNumber} entered PIN: "${digits}"`);
+  res.type('text/xml');
+
+  try {
+    if (digits.length === 4) {
+      const userResult = await pool.query(
+        `SELECT u.id, u.owner_phone FROM users u 
+         JOIN phone_numbers p ON u.id = p.user_id 
+         WHERE p.shield_number = $1`,
+        [calledNumber]
+      );
+
+      if (userResult.rows.length > 0) {
+        const user = userResult.rows[0];
+
+        const contactResult = await pool.query(
+          `SELECT pin_code FROM contacts WHERE user_id = $1 AND caller_number = $2`,
+          [user.id, callerNumber]
+        );
+
+        if (contactResult.rows.length > 0 && contactResult.rows[0].pin_code === digits) {
+          const targetPhone = user.owner_phone || OWNER_PHONE_NUMBER;
+          const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Pin accepted. Connecting your call now.</Say>
+    <Dial timeout="20" callerId="${callerNumber}">${targetPhone}</Dial>
+</Response>`;
+          return res.send(xmlResponse);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[PROCESS DB ERROR]', err.message);
+  }
+
+  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Incorrect pin code.</Say>
+    <Redirect method="POST">${BASE_URL}/voice/voicemail</Redirect>
+</Response>`;
+  res.send(xmlResponse);
+});
 
 app.post('/voice/setup', async (req, res) => {
   const calledNumber = req.body?.To || req.body?.to || SHIELD_PHONE_NUMBER;
@@ -555,7 +601,6 @@ app.post('/voice/setup', async (req, res) => {
     }
   } catch (err) {
     console.error('[SETUP DB ERROR]', err.message);
-    console.error('[SAVE CONTACT ERROR]:', err);
   }
 
   const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
@@ -564,7 +609,6 @@ app.post('/voice/setup', async (req, res) => {
 </Response>`;
   res.send(xmlResponse);
 });
-
 
 app.post('/voice/voicemail', (req, res) => {
   res.type('text/xml');
@@ -644,7 +688,7 @@ app.post('/sms', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// 6. Global Error Handling Middleware (Central Error Trap)
+// 6. Global Error Handling Middleware
 // -------------------------------------------------------------
 app.use((err, req, res, next) => {
   const timestamp = new Date().toISOString();
