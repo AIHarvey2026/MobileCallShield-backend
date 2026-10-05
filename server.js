@@ -138,7 +138,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   console.log(`[AUTH LOGIN ATTEMPT] Received email: "${email}"`);
 
   const userResult = await pool.query(
-    'SELECT id, email, password_hash, role, status FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, role, status FROM users WHERE email = $2',
     [email ? email.trim() : '']
   );
 
