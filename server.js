@@ -134,11 +134,17 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/auth/login', catchAsync(async (req, res, next) => {
+  // 1. Raw dump to prove the request hit the server immediately
+  console.log('--------------------------------------------------');
+  console.log('🚨 [INCOMING LOGIN REQUEST RAW HEADERS]:', JSON.stringify(req.headers, null, 2));
+  console.log('🚨 [INCOMING LOGIN REQUEST RAW BODY]:', JSON.stringify(req.body, null, 2));
+  console.log('--------------------------------------------------');
+
   const { email, password } = req.body || {};
-  console.log(`[AUTH LOGIN ATTEMPT] Received email: "${email}"`);
+  console.log(`[AUTH LOGIN ATTEMPT] Extracted email: "${email}" | Password Length: ${password ? password.length : 0}`);
 
   const userResult = await pool.query(
-    'SELECT id, email, password, role, status FROM users WHERE email = "${email}"',
+    'SELECT id, email, password, role, status FROM users WHERE email = $1',
     [email ? email.trim() : '']
   );
 
