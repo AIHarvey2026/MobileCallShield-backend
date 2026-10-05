@@ -46,7 +46,7 @@ const catchAsync = fn => {
 // -------------------------------------------------------------
 app.use((req, res, next) => {
   const start = Date.now();
-  
+
   let responseBody = '';
   const originalJson = res.json;
   res.json = function (body) {
@@ -56,7 +56,7 @@ app.use((req, res, next) => {
 
   res.on('finish', () => {
     const duration = Date.now() - start;
-    
+
     const detailedLog = {
       timestamp: new Date().toISOString(),
       type: 'HTTP_TRANSACTION',
@@ -71,7 +71,7 @@ app.use((req, res, next) => {
       },
       query: req.query,
       params: req.params,
-      requestBody: req.body, 
+      requestBody: req.body,
       responseSummary: responseBody
     };
 
@@ -89,27 +89,27 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Automatically log every SQL query and its parameters
+// Automatically log every SQL query and its parameters safely
 const originalPoolQuery = pool.query;
 pool.query = async (text, params) => {
   console.log(JSON.stringify({
     timestamp: new Date().toISOString(),
     type: 'DB_QUERY',
-    query: text.trim().replace(/\s+/g, ' '),
+    query: typeof text === 'string' ? text.trim().replace(/\s+/g, ' ') : text,
     parameters: params || []
   }, null, 2));
-  
+
   return originalPoolQuery.apply(pool, [text, params]);
 };
 
 pool.query(`
-  ALTER TABLE users 
+  ALTER TABLE users
   ADD COLUMN IF NOT EXISTS guardian_code VARCHAR(10) DEFAULT '1234',
   ADD COLUMN IF NOT EXISTS is_exempt BOOLEAN DEFAULT FALSE;
 `).then(() => {
-  console.log('✅ [DB CHECK] guardian_code and is_exempt columns verified/added');
+  console.log('  [DB CHECK] guardian_code and is_exempt columns verified/added');
 }).catch(err => {
-  console.error('❌ [DB ERROR] Column update failed:', err.message);
+  console.error('  [DB ERROR] Column update failed:', err.message);
 });
 
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
@@ -138,7 +138,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   console.log(`[AUTH LOGIN ATTEMPT] Received email: "${email}"`);
 
   const userResult = await pool.query(
-    'SELECT id, email, password_hash, password, role, status FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, role, status FROM users WHERE email = $1',
     [email ? email.trim() : '']
   );
 
@@ -148,7 +148,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   }
 
   const user = userResult.rows[0];
-  const storedPassword = user.password_hash || user.password || '';
+  const storedPassword = user.password_hash || '';
   const inputPassword = password ? password.trim() : '';
 
   if (storedPassword !== inputPassword) {
@@ -170,7 +170,7 @@ app.use((err, req, res, next) => {
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
 
-  console.error(JSON.stringify({
+  console.log(JSON.stringify({
     timestamp: new Date().toISOString(),
     level: 'FATAL_OR_OPERATIONAL_ERROR',
     path: req.path,
@@ -178,7 +178,7 @@ app.use((err, req, res, next) => {
     statusCode: err.statusCode,
     message: err.message,
     stack: err.stack
-  }));
+  }, null, 2));
 
   res.status(err.statusCode).json({
     status: err.status,
