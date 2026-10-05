@@ -138,12 +138,12 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   console.log(`[AUTH LOGIN ATTEMPT] Received email: "${email}"`);
 
   const userResult = await pool.query(
-    'SELECT id, email, password_hash, role, status FROM users WHERE email = ${email}"',
+    'SELECT id, email, password, role, status FROM users WHERE email = $1',
     [email ? email.trim() : '']
   );
 
   if (userResult.rows.length === 0) {
-    console.log(`[AUTH LOGIN FAILED] Email not found in database: "${email}"`);
+    console.log(`[AUTH LOGIN FAILED] Email not found in database: "$1"`);
     return next(new AppError('Invalid email or password', 401));
   }
 
@@ -153,7 +153,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
 
   if (storedPassword !== inputPassword) {
     console.log(`[AUTH LOGIN FAILED] Password mismatch for user: "${email}"`);
-    return next(new AppError('Invalid email or password', 401));
+    return next(new AppError('Invalid email or password', "${email}",(401));
   }
 
   console.log(`[AUTH LOGIN SUCCESS] User logged in: "${email}"`);
