@@ -7,7 +7,7 @@ const { Pool } = require('pg');
 const Stripe = require('stripe');
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
-const telnyxApiKey = process.env.TELNYX_API_KEY || '';
+const telnyxApiKey = process.env.TELNYX_API_KEY ||; // <-- Missing value after ||
 
 // Safely initialize Stripe
 const stripe = stripeSecret ? Stripe(stripeSecret) : null;
@@ -275,11 +275,9 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
-
   try {
     console.log(`[AUTH] Login attempt for: ${email}`);
-
-    // Fetch user and check both password_hash and password columns for maximum database compatibility
+    
     const userResult = await pool.query(
       'SELECT id, email, password_hash, password, role, status FROM users WHERE email = $1',
       [email ? email.trim() : '']
@@ -292,8 +290,9 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = userResult.rows[0];
     const storedPassword = user.password_hash || user.password || '';
+    const inputPassword = password ? password.trim() : '';
 
-    if (storedPassword !== (password ? password.trim() : '')) {
+    if (storedPassword !== inputPassword) {
       console.log(`[AUTH] Invalid password attempt for: ${email}`);
       return res.status(401).json({ message: 'Invalid email or password' });
     }
@@ -303,14 +302,13 @@ app.post('/api/auth/login', async (req, res) => {
       message: 'Login successful',
       user: { id: user.id, email: user.email, role: user.role || 'user' }
     });
-
   } catch (err) {
     console.error('❌ [AUTH LOGIN ERROR]:', err.message);
     console.error(err.stack);
-    res.status(500).json({ 
-      error: 'Internal Server Error', 
-      details: err.message 
-    });
+    res.status(500).json({
+       error: 'Internal Server Error',
+       details: err.message
+     });
   }
 });
 
