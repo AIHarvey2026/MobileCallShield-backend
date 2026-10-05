@@ -7,7 +7,7 @@ const { Pool } = require('pg');
 const Stripe = require('stripe');
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
-const telnyxApiKey = process.env.TELNYX_API_KEY ||; // <-- Missing value after ||
+const telnyxApiKey = process.env.TELNYX_API_KEY ||''; // <-- Missing value after ||
 
 // Safely initialize Stripe
 const stripe = stripeSecret ? Stripe(stripeSecret) : null;
