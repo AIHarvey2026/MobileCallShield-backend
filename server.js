@@ -159,7 +159,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
 
   if (storedPassword !== inputPassword) {
     console.log(`[AUTH LOGIN FAILED] Password mismatch for user: "${email}"`);
-    return next(new AppError('Invalid email or password' "${email}", 401));
+    return next(new AppError('Invalid email or password', 401));
   }
 
   console.log(`[AUTH LOGIN SUCCESS] User logged in: "${email}"`);
