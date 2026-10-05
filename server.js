@@ -26,6 +26,31 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// -------------------------------------------------------------
+// STRUCTURED REQUEST & ERROR LOGGING MIDDLEWARE
+// -------------------------------------------------------------
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  // Capture response finish to log status and duration
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const logData = {
+      timestamp: new Date().toISOString(),
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      durationMs: duration,
+      query: req.query,
+      // Safely log body for POST requests (hide sensitive passwords if desired)
+      body: req.method === 'POST' ? { ...req.body, password: req.body.password ? '[HIDDEN]' : undefined } : undefined
+    };
+    console.log(JSON.stringify(logData));
+  });
+  
+  next();
+});
+
 // Initialize PostgreSQL Connection Pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
