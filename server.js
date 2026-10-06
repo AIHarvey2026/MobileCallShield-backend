@@ -8,6 +8,7 @@ const Stripe = require('stripe');
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
 const telnyxApiKey = process.env.TELNYX_API_KEY || '';
+const twilio = require('twilio');
 
 const stripe = stripeSecret ? Stripe(stripeSecret) : null;
 
@@ -105,9 +106,9 @@ pool.query = async (text, params) => {
 pool.query(`
   ALTER TABLE users
   ADD COLUMN IF NOT EXISTS guardian_code VARCHAR(10) DEFAULT '1234',
-  ADD COLUMN IF NOT EXISTS is_exempt BOOLEAN DEFAULT FALSE;
+  ADD COLUMN IF NOT EXISTS is_allowed BOOLEAN DEFAULT FALSE;
 `).then(() => {
-  console.log('  [DB CHECK] guardian_code and is_exempt columns verified/added');
+  console.log('  [DB CHECK] guardian_code and is_allowed columns verified/added');
 }).catch(err => {
   console.error('  [DB ERROR] Column update failed:', err.message);
 });
@@ -119,14 +120,10 @@ pool.query(`
     user_id VARCHAR(255) NOT NULL,
     caller_number VARCHAR(50) NOT NULL,
     pin_code VARCHAR(20),
-    is_exempt BOOLEAN DEFAULT FALSE,
+    is_allowed BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
-`).then(() => {
-  console.log('  [DB CHECK] contacts table verified/created');
-}).catch(err => {
-  console.error('  [DB ERROR] Contacts table creation failed:', err.message);
-});
+`);
 
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
@@ -194,7 +191,7 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
 // -------------------------------------------------------------
 app.post('/api/contacts', catchAsync(async (req, res, next) => {
   const bodyUserId = req.body?.userId || req.body?.user_id;
-  const { caller_number, pin_code, is_exempt } = req.body || {};
+  const { caller_number, pin_code, is_allowed } = req.body || {};
 
   if (!bodyUserId) {
     return next(new AppError('User ID is required', 400));
@@ -202,9 +199,9 @@ app.post('/api/contacts', catchAsync(async (req, res, next) => {
 
   // Insert contact into PostgreSQL
   await pool.query(
-    `INSERT INTO contacts (user_id, caller_number, pin_code, is_exempt) 
+    `INSERT INTO contacts (user_id, caller_number, pin_code, is_allowed) 
      VALUES ($1, $2, $3, $4)`,
-    [bodyUserId, caller_number, pin_code, is_exempt || false]
+    [bodyUserId, caller_number, pin_code, is_allowed || false]
   );
 
   console.log(`[CONTACTS SAVE] Saved contact ${caller_number} for user: ${bodyUserId}`);
@@ -226,7 +223,7 @@ app.get('/api/contacts/:userId', catchAsync(async (req, res, next) => {
   }
 
   const result = await pool.query(
-    'SELECT caller_number, pin_code, is_exempt FROM contacts WHERE user_id = $1 ORDER BY id DESC',
+    'SELECT caller_number, pin_code, is_allowed FROM contacts WHERE user_id = $1 ORDER BY id DESC',
     [userId]
   );
 
