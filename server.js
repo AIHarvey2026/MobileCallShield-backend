@@ -113,11 +113,11 @@ pool.query(`
   console.error('  [DB ERROR] Column update failed:', err.message);
 });
 
-// Create contacts table if it doesn't exist (Global Startup)
+//// Create contacts table with UUID user_id
 pool.query(`
   CREATE TABLE IF NOT EXISTS contacts (
     id SERIAL PRIMARY KEY,
-    user_id VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL,
     caller_number VARCHAR(50) NOT NULL,
     pin_code VARCHAR(20),
     is_allowed BOOLEAN DEFAULT FALSE,
