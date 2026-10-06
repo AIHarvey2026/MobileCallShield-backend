@@ -89,7 +89,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Automatically log every SQL query and its parameters safely
 const originalPoolQuery = pool.query;
 pool.query = async (text, params) => {
   console.log(JSON.stringify({
@@ -102,6 +101,7 @@ pool.query = async (text, params) => {
   return originalPoolQuery.apply(pool, [text, params]);
 };
 
+// Verify/Add columns to users table
 pool.query(`
   ALTER TABLE users
   ADD COLUMN IF NOT EXISTS guardian_code VARCHAR(10) DEFAULT '1234',
@@ -110,6 +110,22 @@ pool.query(`
   console.log('  [DB CHECK] guardian_code and is_exempt columns verified/added');
 }).catch(err => {
   console.error('  [DB ERROR] Column update failed:', err.message);
+});
+
+// Create contacts table if it doesn't exist
+pool.query(`
+  CREATE TABLE IF NOT EXISTS contacts (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    caller_number VARCHAR(50) NOT NULL,
+    pin_code VARCHAR(20),
+    is_exempt BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`).then(() => {
+  console.log('  [DB CHECK] contacts table verified/created');
+}).catch(err => {
+  console.error('  [DB ERROR] Contacts table creation failed:', err.message);
 });
 
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
@@ -177,27 +193,30 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
 // Save / Update Identity Contacts Endpoint (POST)
 // -------------------------------------------------------------
 app.post('/api/contacts', catchAsync(async (req, res, next) => {
-  console.log('--------------------------------------------------');
-  console.log('🚨 [INCOMING CONTACTS REQUEST RAW BODY]:', JSON.stringify(req.body, null, 2));
-  console.log('--------------------------------------------------');
-
   const bodyUserId = req.body?.userId || req.body?.user_id;
-  const { contacts } = req.body || {};
+  const { caller_number, pin_code, is_exempt } = req.body || {};
 
   if (!bodyUserId) {
     return next(new AppError('User ID is required', 400));
   }
 
-  console.log(`[CONTACTS SAVE] Received ${Array.isArray(contacts) ? contacts.length : 'some'} contacts for user: ${bodyUserId}`);
+  // Insert contact into PostgreSQL
+  await pool.query(
+    `INSERT INTO contacts (user_id, caller_number, pin_code, is_exempt) 
+     VALUES ($1, $2, $3, $4)`,
+    [bodyUserId, caller_number, pin_code, is_exempt || false]
+  );
+
+  console.log(`[CONTACTS SAVE] Saved contact ${caller_number} for user: ${bodyUserId}`);
 
   res.status(200).json({
-    message: 'Contacts saved successfully',
-    receivedCount: Array.isArray(contacts) ? contacts.length : 0
+    message: 'Contact saved successfully',
+    status: 'success'
   });
 }));
 
 // -------------------------------------------------------------
-// Get Contacts Endpoint (GET) - Matches Android app's request
+// Get Contacts Endpoint (GET) - Fetches real contacts from DB
 // -------------------------------------------------------------
 app.get('/api/contacts/:userId', catchAsync(async (req, res, next) => {
   const { userId } = req.params;
@@ -206,12 +225,16 @@ app.get('/api/contacts/:userId', catchAsync(async (req, res, next) => {
     return next(new AppError('User ID is required', 400));
   }
 
-  console.log(`[CONTACTS FETCH] Fetching contacts for user: ${userId}`);
+  const result = await pool.query(
+    'SELECT caller_number, pin_code, is_exempt FROM contacts WHERE user_id = $1 ORDER BY id DESC',
+    [userId]
+  );
 
-  // Returns a successful empty list so Android stops throwing a 404
+  console.log(`[CONTACTS FETCH] Found ${result.rows.length} contacts for user: ${userId}`);
+
   res.status(200).json({
     status: 'success',
-    contacts: []
+    contacts: result.rows
   });
 }));
 
