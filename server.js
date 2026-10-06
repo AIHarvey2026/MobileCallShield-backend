@@ -113,7 +113,7 @@ pool.query(`
   console.error('  [DB ERROR] Column update failed:', err.message);
 });
 
-// Create contacts table if it doesn't exist
+// Create contacts table if it doesn't exist (Global Startup)
 pool.query(`
   CREATE TABLE IF NOT EXISTS contacts (
     id SERIAL PRIMARY KEY,
@@ -123,7 +123,11 @@ pool.query(`
     is_allowed BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
-`);
+`).then(() => {
+  console.log('  [DB CHECK] contacts table verified/created');
+}).catch(err => {
+  console.error('  [DB ERROR] Contacts table creation failed:', err.message);
+});
 
 const OWNER_PHONE_NUMBER = process.env.OWNER_PHONE_NUMBER || '+18324254469';
 const SHIELD_PHONE_NUMBER = process.env.SHIELD_PHONE_NUMBER || '+13466036303';
