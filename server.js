@@ -216,27 +216,27 @@ app.post('/api/contacts', catchAsync(async (req, res, next) => {
   });
 }));
 
+
 // -------------------------------------------------------------
 // Get Contacts Endpoint (GET) - Fetches real contacts from DB
 // -------------------------------------------------------------
-app.get('/api/contacts/:userId', catchAsync(async (req, res, next) => {
-  const { userId } = req.params;
+app.get('/api/contacts', catchAsync(async (req, res, next) => {
+    const userId = req.query.userId;
+    
+    if (!userId) {
+        return next(new AppError('Missing userId parameter', 400));
+    }
 
-  if (!userId) {
-    return next(new AppError('User ID is required', 400));
-  }
+    // Query PostgreSQL using $1 placeholder
+    const result = await pool.query(
+        "SELECT * FROM contacts WHERE user_id = $1",
+        [userId]
+    );
 
-  const result = await pool.query(
-    'SELECT caller_number, pin_code, is_allowed FROM contacts WHERE user_id = $1 ORDER BY id DESC',
-    [userId]
-  );
-
-  console.log(`[CONTACTS FETCH] Found ${result.rows.length} contacts for user: ${userId}`);
-
-  res.status(200).json({
-    status: 'success',
-    contacts: result.rows
-  });
+    // Return the rows (empty array [] if none exist)
+    res.status(200).json({
+        contacts: result.rows || []
+    });
 }));
 
 // -------------------------------------------------------------
