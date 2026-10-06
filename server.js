@@ -173,23 +173,45 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   });
 }));
 
-// Save / Update Identity Contacts Endpoint
+// -------------------------------------------------------------
+// Save / Update Identity Contacts Endpoint (POST)
+// -------------------------------------------------------------
 app.post('/api/contacts', catchAsync(async (req, res, next) => {
   console.log('--------------------------------------------------');
   console.log('🚨 [INCOMING CONTACTS REQUEST RAW BODY]:', JSON.stringify(req.body, null, 2));
   console.log('--------------------------------------------------');
 
-  const { userId, contacts } = req.body || {};
+  const bodyUserId = req.body?.userId || req.body?.user_id;
+  const { contacts } = req.body || {};
+
+  if (!bodyUserId) {
+    return next(new AppError('User ID is required', 400));
+  }
+
+  console.log(`[CONTACTS SAVE] Received ${Array.isArray(contacts) ? contacts.length : 'some'} contacts for user: ${bodyUserId}`);
+
+  res.status(200).json({
+    message: 'Contacts saved successfully',
+    receivedCount: Array.isArray(contacts) ? contacts.length : 0
+  });
+}));
+
+// -------------------------------------------------------------
+// Get Contacts Endpoint (GET) - Matches Android app's request
+// -------------------------------------------------------------
+app.get('/api/contacts/:userId', catchAsync(async (req, res, next) => {
+  const { userId } = req.params;
 
   if (!userId) {
     return next(new AppError('User ID is required', 400));
   }
 
-  console.log(`[CONTACTS SAVE] Received ${Array.isArray(contacts) ? contacts.length : 'some'} contacts for user: ${userId}`);
+  console.log(`[CONTACTS FETCH] Fetching contacts for user: ${userId}`);
 
+  // Returns a successful empty list so Android stops throwing a 404
   res.status(200).json({
-    message: 'Contacts saved successfully',
-    receivedCount: Array.isArray(contacts) ? contacts.length : 0
+    status: 'success',
+    contacts: []
   });
 }));
 
