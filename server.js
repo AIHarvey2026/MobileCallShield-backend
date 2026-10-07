@@ -241,6 +241,114 @@ app.get('/api/contacts', catchAsync(async (req, res, next) => {
     });
 }));
 
+const twilio = require('twilio');
+const VoiceResponse = twilio.twiml.VoiceResponse;
+
+// ==========================================
+// TWILIO CALL SCREENING WEBHOOK ROUTES
+// ==========================================
+
+// 1. Initial Voice Webhook when someone calls your Shield number
+app.post('/api/twilio/voice', async (req, res) => {
+    const twml = new VoiceResponse();
+    const callerNumber = req.body.From;
+    const calledNumber = req.body.To;
+
+    console.log(`[TWILIO VOICE] Incoming call from ${callerNumber} to ${calledNumber}`);
+
+    try {
+        const contactResult = await pool.query(
+            'SELECT * FROM contacts WHERE caller_number = $1 AND is_allowed = TRUE LIMIT 1',
+            [callerNumber]
+        );
+
+        if (contactResult.rows.length > 0) {
+            console.log(`[TWILIO VOICE] Trusted caller detected: ${callerNumber}. Connecting directly.`);
+            twml.dial(OWNER_PHONE_NUMBER);
+        } else {
+            console.log(`[TWILIO VOICE] Unknown caller: ${callerNumber}. Prompting for PIN.`);
+            const gather = twml.gather({
+                numDigits: 4,
+                action: '/api/twilio/verify-pin',
+                method: 'POST',
+                timeout: 10
+            });
+            gather.say('Please enter your secret 4-digit PIN code to connect to this line.');
+
+            twml.say('We did not receive any input. Please leave a message after the tone.');
+            twml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                transcribe: true,
+                maxLength: 120
+            });
+        }
+    } catch (err) {
+        console.error('[TWILIO VOICE ERROR]', err.message);
+        twml.say('An error occurred. Please try again later.');
+    }
+
+    res.type('text/xml');
+    res.send(twml.toString());
+});
+
+// 2. PIN Verification Route (Handles <Gather> result)
+app.post('/api/twilio/verify-pin', async (req, res) => {
+    const twml = new VoiceResponse();
+    const enteredPin = req.body.Digits;
+    const callerNumber = req.body.From;
+
+    console.log(`[TWILIO PIN] Caller ${callerNumber} entered PIN: ${enteredPin}`);
+
+    try {
+        const matchResult = await pool.query(
+            'SELECT * FROM contacts WHERE caller_number = $1 AND pin_code = $2 LIMIT 1',
+            [callerNumber, enteredPin]
+        );
+
+        if (matchResult.rows.length > 0) {
+            const contact = matchResult.rows[0];
+            await pool.query('UPDATE contacts SET is_allowed = TRUE WHERE id = $1', [contact.id]);
+
+            console.log(`[TWILIO PIN SUCCESS] Valid PIN for ${callerNumber}. Connecting call.`);
+            twml.say('PIN verified successfully. Connecting your call now.');
+            twml.dial(OWNER_PHONE_NUMBER);
+        } else {
+            console.log(`[TWILIO PIN FAILED] Invalid PIN entered by ${callerNumber}. Redirecting to voicemail.`);
+            twml.say('Incorrect PIN code. Please leave a message after the tone.');
+            twml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                transcribe: true,
+                maxLength: 120
+            });
+        }
+    } catch (err) {
+        console.error('[TWILIO PIN ERROR]', err.message);
+        twml.say('An error occurred processing your code.');
+    }
+
+    res.type('text/xml');
+    res.send(twml.toString());
+});
+
+// 3. Voicemail Handler Route
+app.post('/api/twilio/handle-voicemail', async (req, res) => {
+    const twml = new VoiceResponse();
+    const recordingUrl = req.body.RecordingUrl;
+    const transcription = req.body.TranscriptionText || 'No transcription available';
+    const callerNumber = req.body.From;
+
+    console.log(`[TWILIO VOICEMAIL] Received from ${callerNumber}. Recording URL: ${recordingUrl}`);
+    console.log(`[TWILIO VOICEMAIL TRANSCRIPT] ${transcription}`);
+
+    twml.say('Thank you. Your message has been recorded. Goodbye.');
+    twml.hangup();
+
+    res.type('text/xml');
+    res.send(twml.toString());
+});
+
 // -------------------------------------------------------------
 // 5. GLOBAL CENTRALIZED ERROR-HANDLING MIDDLEWARE (Must be last)
 // -------------------------------------------------------------
