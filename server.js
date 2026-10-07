@@ -27,13 +27,6 @@ app.post('/voice', async (req, res) => {
 
     try {
         // Find which user owns this shield number
-        const userQuery = `
-            u.id as user_id, u.owner_phone, u.email
-            FROM phone_numbers p
-            JOIN users u ON p.user_id = u.id
-            WHERE p.shield_number = $1
-        `;
-        // Let's run a clean query
         const userResult = await pool.query(
             `SELECT u.id as user_id, u.owner_phone FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.shield_number = $1`,
             [shieldNumber]
@@ -44,7 +37,7 @@ app.post('/voice', async (req, res) => {
         let ownerPhone = process.env.PERSONAL_PHONE_NUMBER;
 
         if (userResult.rows.length > 0) {
-            userId = userResult.rows.length > 0 ? userResult.rows[0].user_id : null;
+            userId = userResult.rows[0].user_id;
             ownerPhone = userResult.rows[0].owner_phone || process.env.PERSONAL_PHONE_NUMBER;
         }
 
@@ -111,25 +104,28 @@ app.post('/verify-pin', (req, res) => {
     res.send(twiml.toString());
 });
 
-// 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS
+// 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
-    const { userId, name, phoneNumber, isGuardian } = req.body;
-    
     try {
+        const userId = req.body.userId || req.body.user_id;
+        const name = req.body.name;
+        const phoneNumber = req.body.phoneNumber || req.body.phone_number;
+        const isGuardian = req.body.isGuardian !== undefined ? req.body.isGuardian : req.body.is_guardian;
+
         const query = `
-            INSERT INTO trusted_contacts (user_id, phone_number, name, is_guardian)
+            INSERT INTO public.trusted_contacts (user_id, name, phone_number, is_guardian) 
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (user_id, phone_number) 
             DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian
-            RETURNING *;
+            RETURNING *
         `;
-        const values = [userId || null, phoneNumber, name, isGuardian || false];
-        const result = await pool.query(query, values);
+        const values = [userId, name, phoneNumber, isGuardian ?? false];
         
-        res.status(201).json({ success: true, contact: result.rows[0] });
+        const result = await pool.query(query, values);
+        res.status(200).json({ success: true, contact: result.rows[0] });
     } catch (err) {
         console.error("[API CONTACT ERROR]", err);
-        res.status(500).json({ success: false, error: "Database error saving contact" });
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
