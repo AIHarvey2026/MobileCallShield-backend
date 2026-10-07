@@ -437,6 +437,12 @@ app.post('/api/twilio/handle-voicemail', async (req, res) => {
   res.send(twml.toString());
 });
 
+//UptimeRobot Health check
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'healthy', timestamp: new Date() });
+});
+
+
 // -------------------------------------------------------------
 // 5. GLOBAL CENTRALIZED ERROR-HANDLING MIDDLEWARE (Must be last)
 // -------------------------------------------------------------
