@@ -241,8 +241,6 @@ app.get('/api/contacts', catchAsync(async (req, res, next) => {
     });
 }));
 
-const twilio = require('twilio');
-const VoiceResponse = twilio.twiml.VoiceResponse;
 
 // ==========================================
 // TWILIO CALL SCREENING WEBHOOK ROUTES
