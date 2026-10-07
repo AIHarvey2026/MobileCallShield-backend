@@ -6,6 +6,10 @@ const Telnyx = require('telnyx');
 const { Pool } = require('pg');
 const Stripe = require('stripe');
 
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
 const stripeSecret = process.env.STRIPE_SECRET_KEY || '';
 const telnyxApiKey = process.env.TELNYX_API_KEY || '';
 const twilio = require('twilio');
@@ -20,10 +24,6 @@ try {
 } catch (e) {
   console.error('[TELNYX INIT ERROR]', e.message);
 }
-
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
 // -------------------------------------------------------------
 // 1. CENTRALIZED ERROR CLASSES & HELPERS
@@ -113,7 +113,7 @@ pool.query(`
   console.error('  [DB ERROR] Column update failed:', err.message);
 });
 
-//// Create contacts table with UUID user_id
+// Verify contacts table with UUID user_id
 pool.query(`
   CREATE TABLE IF NOT EXISTS contacts (
     id SERIAL PRIMARY KEY,
@@ -190,9 +190,17 @@ app.post('/api/auth/login', catchAsync(async (req, res, next) => {
   });
 }));
 
-// -------------------------------------------------------------
+// Get App Configuration & Branding Endpoint (GET)
+app.get('/api/config', catchAsync(async (req, res, next) => {
+    const result = await pool.query('SELECT app_name, support_email, support_phone, logo_url FROM app_settings LIMIT 1');
+   
+    res.status(200).json({
+        success: true,
+        config: result.rows[0] || {}
+    });
+}));
+
 // Save / Update Identity Contacts Endpoint (POST)
-// -------------------------------------------------------------
 app.post('/api/contacts', catchAsync(async (req, res, next) => {
   const bodyUserId = req.body?.userId || req.body?.user_id;
   const { caller_number, pin_code, is_allowed } = req.body || {};
@@ -201,7 +209,6 @@ app.post('/api/contacts', catchAsync(async (req, res, next) => {
     return next(new AppError('User ID is required', 400));
   }
 
-  // Insert contact into PostgreSQL
   await pool.query(
     `INSERT INTO contacts (user_id, caller_number, pin_code, is_allowed) 
      VALUES ($1, $2, $3, $4)`,
@@ -216,10 +223,7 @@ app.post('/api/contacts', catchAsync(async (req, res, next) => {
   });
 }));
 
-
-// -------------------------------------------------------------
-// Get Contacts Endpoint (GET) - Fetches real contacts from DB
-// -------------------------------------------------------------
+// Get Contacts Endpoint (GET)
 app.get('/api/contacts', catchAsync(async (req, res, next) => {
     const userId = req.query.userId;
     
@@ -227,13 +231,11 @@ app.get('/api/contacts', catchAsync(async (req, res, next) => {
         return next(new AppError('Missing userId parameter', 400));
     }
 
-    // Query PostgreSQL using $1 placeholder
     const result = await pool.query(
         "SELECT * FROM contacts WHERE user_id = $1",
         [userId]
     );
 
-    // Return the rows (empty array [] if none exist)
     res.status(200).json({
         contacts: result.rows || []
     });
