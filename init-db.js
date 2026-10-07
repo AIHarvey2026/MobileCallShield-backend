@@ -67,6 +67,20 @@ async function initDB() {
     `);
     console.log('  ✔ Verified table: subscriptions');
 
+    // 5. Trusted Contacts Per User Table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS trusted_contacts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        phone_number VARCHAR(20) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        is_guardian BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, phone_number)
+      );
+    `);
+    console.log('  ✔ Verified table: trusted_contacts');
+
     console.log('[DB INIT] Database initialization complete!');
   } catch (err) {
     console.error('[DB INIT ERROR]', err.message);
