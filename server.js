@@ -107,26 +107,33 @@ app.post('/verify-pin', (req, res) => {
 // 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
     try {
-        console.log("[API CONTACT BODY RECEIVED]", req.body); // <-- Add this log
+        console.log("[API CONTACT BODY RECEIVED]", req.body);
 
-        const userId = req.body.userId || req.body.user_id;
+        let userId = req.body.userId || req.body.user_id;
         const name = req.body.name;
         const phoneNumber = req.body.phoneNumber || req.body.phone_number;
         const isGuardian = req.body.isGuardian !== undefined ? req.body.isGuardian : req.body.is_guardian;
 
+        // Simple regex check to verify if incoming userId is a valid UUID
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!userId || !uuidRegex.test(userId)) {
+            // Fallback default test UUID if the app hasn't set up real UUID auth yet
+            userId = "00000000-0000-0000-0000-000000000001";
+        }
+
         const query = `
-            INSERT INTO public.trusted_contacts (user_id, name, phone_number, is_guardian) 
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, phone_number) 
+            INSERT INTO public.trusted_contacts (id, user_id, name, phone_number, is_guardian)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4)
+            ON CONFLICT (user_id, phone_number)
             DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian
             RETURNING *
         `;
         const values = [userId, name, phoneNumber, isGuardian ?? false];
-        
+       
         const result = await pool.query(query, values);
         res.status(200).json({ success: true, contact: result.rows[0] });
     } catch (err) {
-        console.error("[API CONTACT ERROR DETAIL]", err.message); // <-- Prints exact SQL error
+        console.error("[API CONTACT ERROR DETAIL]", err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
