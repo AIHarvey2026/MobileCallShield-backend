@@ -107,6 +107,8 @@ app.post('/verify-pin', (req, res) => {
 // 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
     try {
+        console.log("[API CONTACT BODY RECEIVED]", req.body); // <-- Add this log
+
         const userId = req.body.userId || req.body.user_id;
         const name = req.body.name;
         const phoneNumber = req.body.phoneNumber || req.body.phone_number;
@@ -124,7 +126,7 @@ app.post('/api/contacts', async (req, res) => {
         const result = await pool.query(query, values);
         res.status(200).json({ success: true, contact: result.rows[0] });
     } catch (err) {
-        console.error("[API CONTACT ERROR]", err);
+        console.error("[API CONTACT ERROR DETAIL]", err.message); // <-- Prints exact SQL error
         res.status(500).json({ success: false, error: err.message });
     }
 });
