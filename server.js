@@ -1,4 +1,6 @@
 require('dotenv').config();
+// Automatically check and create tables when the server starts up
+require('./init-db.js');
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -241,110 +243,198 @@ app.get('/api/contacts', catchAsync(async (req, res, next) => {
     });
 }));
 
+// Get signed phone number
 
-// ==========================================
-// TWILIO CALL SCREENING WEBHOOK ROUTES
-// ==========================================
+app.post('/api/preferences', async (req, res) => {
+  const { userId, forwardingNumber } = req.body;
 
-// 1. Initial Voice Webhook when someone calls your Shield number
-app.post('/api/twilio/voice', async (req, res) => {
-    const twml = new VoiceResponse();
-    const callerNumber = req.body.From;
-    const calledNumber = req.body.To;
+  if (!userId || !forwardingNumber) {
+    return res.status(400).json({ error: 'User ID and forwarding number are required' });
+  }
 
-    console.log(`[TWILIO VOICE] Incoming call from ${callerNumber} to ${calledNumber}`);
+  try {
+    // 1. Update the user's personal forwarding number in the users table
+    await pool.query(
+      'UPDATE users SET owner_phone = $1 WHERE id = $2',
+      [forwardingNumber, userId]
+    );
 
-    try {
-        const contactResult = await pool.query(
-            'SELECT * FROM contacts WHERE caller_number = $1 AND is_allowed = TRUE LIMIT 1',
-            [callerNumber]
-        );
+    // 2. Check if this user already has an assigned shield number
+    let phoneResult = await pool.query(
+      'SELECT shield_number FROM phone_numbers WHERE user_id = $1 LIMIT 1',
+      [userId]
+    );
 
-        if (contactResult.rows.length > 0) {
-            console.log(`[TWILIO VOICE] Trusted caller detected: ${callerNumber}. Connecting directly.`);
-            twml.dial(OWNER_PHONE_NUMBER);
-        } else {
-            console.log(`[TWILIO VOICE] Unknown caller: ${callerNumber}. Prompting for PIN.`);
-            const gather = twml.gather({
-                numDigits: 4,
-                action: '/api/twilio/verify-pin',
-                method: 'POST',
-                timeout: 10
-            });
-            gather.say('Please enter your secret 4-digit PIN code to connect to this line.');
+    let assignedShieldNumber = phoneResult.rows[0]?.shield_number;
 
-            twml.say('We did not receive any input. Please leave a message after the tone.');
-            twml.record({
-                action: '/api/twilio/handle-voicemail',
-                method: 'POST',
-                transcribe: true,
-                maxLength: 120
-            });
-        }
-    } catch (err) {
-        console.error('[TWILIO VOICE ERROR]', err.message);
-        twml.say('An error occurred. Please try again later.');
+    // 3. If they don't have one yet, grab an unassigned number from the pool
+    if (!assignedShieldNumber) {
+      const poolResult = await pool.query(
+        `SELECT id, shield_number FROM phone_numbers 
+         WHERE status = 'unassigned' AND user_id IS NULL 
+         LIMIT 1 FOR UPDATE`
+      );
+
+      if (poolResult.rows.length === 0) {
+        return res.status(400).json({ error: 'No available phone numbers left in the pool.' });
+      }
+
+      assignedShieldNumber = poolResult.rows[0].shield_number;
+
+      // Assign it to this user
+      await pool.query(
+        `UPDATE phone_numbers 
+         SET status = 'assigned', user_id = $1, assigned_at = CURRENT_TIMESTAMP 
+         WHERE shield_number = $2`,
+        [userId, assignedShieldNumber]
+      );
+      
+      console.log(`[POOL] Assigned ${assignedShieldNumber} to user ${userId}`);
     }
 
-    res.type('text/xml');
-    res.send(twml.toString());
+    res.status(200).json({
+      success: true,
+      message: 'Preferences saved and shield number assigned successfully',
+      shield_number: assignedShieldNumber
+    });
+
+  } catch (err) {
+    console.error('[PREFERENCES ERROR]', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-// 2. PIN Verification Route (Handles <Gather> result)
-app.post('/api/twilio/verify-pin', async (req, res) => {
-    const twml = new VoiceResponse();
-    const enteredPin = req.body.Digits;
-    const callerNumber = req.body.From;
 
-    console.log(`[TWILIO PIN] Caller ${callerNumber} entered PIN: ${enteredPin}`);
+// 1. Initial Voice Webhook when someone calls a user's assigned Shield number
+app.post('/api/twilio/voice', async (req, res) => {
+  const twml = new twilio.twiml.VoiceResponse();
+  const callerNumber = req.body.From;
+  const calledNumber = req.body.To; // This is the user's assigned shield_number
 
-    try {
-        const matchResult = await pool.query(
-            'SELECT * FROM contacts WHERE caller_number = $1 AND pin_code = $2 LIMIT 1',
-            [callerNumber, enteredPin]
-        );
+  console.log(`[TWILIO VOICE] Incoming call from ${callerNumber} to Shield number ${calledNumber}`);
 
-        if (matchResult.rows.length > 0) {
-            const contact = matchResult.rows[0];
-            await pool.query('UPDATE contacts SET is_allowed = TRUE WHERE id = $1', [contact.id]);
+  try {
+    // 1. Find which user owns this shield number and get their forwarding number (owner_phone)
+    const userResult = await pool.query(
+      `SELECT u.id as user_id, u.owner_phone 
+       FROM phone_numbers p
+       JOIN users u ON p.user_id = u.id
+       WHERE p.shield_number = $1 AND p.status = 'assigned'
+       LIMIT 1`,
+      [calledNumber]
+    );
 
-            console.log(`[TWILIO PIN SUCCESS] Valid PIN for ${callerNumber}. Connecting call.`);
-            twml.say('PIN verified successfully. Connecting your call now.');
-            twml.dial(OWNER_PHONE_NUMBER);
-        } else {
-            console.log(`[TWILIO PIN FAILED] Invalid PIN entered by ${callerNumber}. Redirecting to voicemail.`);
-            twml.say('Incorrect PIN code. Please leave a message after the tone.');
-            twml.record({
-                action: '/api/twilio/handle-voicemail',
-                method: 'POST',
-                transcribe: true,
-                maxLength: 120
-            });
-        }
-    } catch (err) {
-        console.error('[TWILIO PIN ERROR]', err.message);
-        twml.say('An error occurred processing your code.');
+    if (userResult.rows.length === 0) {
+      console.log(`[TWILIO VOICE ERROR] Shield number ${calledNumber} not found or unassigned.`);
+      twml.say('This number is not active. Goodbye.');
+      twml.hangup();
+      res.type('text/xml');
+      return res.send(twml.toString());
     }
 
-    res.type('text/xml');
-    res.send(twml.toString());
+    const { user_id, owner_phone } = userResult.rows[0];
+
+    if (!owner_phone) {
+      console.log(`[TWILIO VOICE ERROR] User ${user_id} has no forwarding number set.`);
+      twml.say('The owner of this line has not configured their forwarding number yet. Please try again later.');
+      twml.hangup();
+      res.type('text/xml');
+      return res.send(twml.toString());
+    }
+
+    // 2. Check if this caller is allowed for this specific user
+    const contactResult = await pool.query(
+      'SELECT * FROM contacts WHERE user_id = $1 AND caller_number = $2 AND is_allowed = TRUE LIMIT 1',
+      [user_id, callerNumber]
+    );
+
+    if (contactResult.rows.length > 0) {
+      console.log(`[TWILIO VOICE] Trusted caller ${callerNumber} for user ${user_id}. Forwarding to ${owner_phone}.`);
+      twml.dial(owner_phone);
+    } else {
+      console.log(`[TWILIO VOICE] Unknown caller ${callerNumber} for user ${user_id}. Prompting for PIN.`);
+      const gather = twml.gather({
+        numDigits: 4,
+        action: `/api/twilio/verify-pin?userId=${user_id}&ownerPhone=${encodeURIComponent(owner_phone)}`,
+        method: 'POST',
+        timeout: 10
+      });
+      gather.say('Please enter your secret 4-digit PIN code to connect to this line.');
+
+      twml.say('We did not receive any input. Please leave a message after the tone.');
+      twml.record({
+        action: '/api/twilio/handle-voicemail',
+        method: 'POST',
+        transcribe: true,
+        maxLength: 120
+      });
+    }
+  } catch (err) {
+    console.error('[TWILIO VOICE ERROR]', err.message);
+    twml.say('An error occurred. Please try again later.');
+  }
+
+  res.type('text/xml');
+  res.send(twml.toString());
+});
+
+// 2. PIN Verification Route
+app.post('/api/twilio/verify-pin', async (req, res) => {
+  const twml = new twilio.twiml.VoiceResponse();
+  const enteredPin = req.body.Digits;
+  const callerNumber = req.body.From;
+  const userId = req.query.userId;
+  const ownerPhone = req.query.ownerPhone;
+
+  console.log(`[TWILIO PIN] Caller ${callerNumber} entered PIN: ${enteredPin} for user ${userId}`);
+
+  try {
+    const matchResult = await pool.query(
+      'SELECT * FROM contacts WHERE user_id = $1 AND caller_number = $2 AND pin_code = $3 LIMIT 1',
+      [userId, callerNumber, enteredPin]
+    );
+
+    if (matchResult.rows.length > 0) {
+      const contact = matchResult.rows[0];
+      await pool.query('UPDATE contacts SET is_allowed = TRUE WHERE id = $1', [contact.id]);
+
+      console.log(`[TWILIO PIN SUCCESS] Valid PIN for ${callerNumber}. Connecting call to ${ownerPhone}.`);
+      twml.say('PIN verified successfully. Connecting your call now.');
+      twml.dial(ownerPhone);
+    } else {
+      console.log(`[TWILIO PIN FAILED] Invalid PIN entered by ${callerNumber}. Redirecting to voicemail.`);
+      twml.say('Incorrect PIN code. Please leave a message after the tone.');
+      twml.record({
+        action: '/api/twilio/handle-voicemail',
+        method: 'POST',
+        transcribe: true,
+        maxLength: 120
+      });
+    }
+  } catch (err) {
+    console.error('[TWILIO PIN ERROR]', err.message);
+    twml.say('An error occurred processing your code.');
+  }
+
+  res.type('text/xml');
+  res.send(twml.toString());
 });
 
 // 3. Voicemail Handler Route
 app.post('/api/twilio/handle-voicemail', async (req, res) => {
-    const twml = new VoiceResponse();
-    const recordingUrl = req.body.RecordingUrl;
-    const transcription = req.body.TranscriptionText || 'No transcription available';
-    const callerNumber = req.body.From;
+  const twml = new twilio.twiml.VoiceResponse();
+  const recordingUrl = req.body.RecordingUrl;
+  const transcription = req.body.TranscriptionText || 'No transcription available';
+  const callerNumber = req.body.From;
 
-    console.log(`[TWILIO VOICEMAIL] Received from ${callerNumber}. Recording URL: ${recordingUrl}`);
-    console.log(`[TWILIO VOICEMAIL TRANSCRIPT] ${transcription}`);
+  console.log(`[TWILIO VOICEMAIL] Received from ${callerNumber}. Recording URL: ${recordingUrl}`);
+  console.log(`[TWILIO VOICEMAIL TRANSCRIPT] ${transcription}`);
 
-    twml.say('Thank you. Your message has been recorded. Goodbye.');
-    twml.hangup();
+  twml.say('Thank you. Your message has been recorded. Goodbye.');
+  twml.hangup();
 
-    res.type('text/xml');
-    res.send(twml.toString());
+  res.type('text/xml');
+  res.send(twml.toString());
 });
 
 // -------------------------------------------------------------

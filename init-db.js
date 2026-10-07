@@ -10,7 +10,7 @@ async function initDB() {
   console.log('[DB INIT] Starting database table initialization...');
 
   try {
-    // 1. Users Table
+    // 1. Users Table (Stores user profile & owner/forwarding phone number)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -23,22 +23,22 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('  ✔ Created table: users');
+    console.log('  ✔ Verified table: users');
 
-    // 2. Phone Numbers Table
+    // 2. Phone Numbers Pool Table (Acts as both the inventory pool and assignment tracker)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS phone_numbers (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         shield_number VARCHAR(20) UNIQUE NOT NULL,
         status VARCHAR(20) DEFAULT 'unassigned',
-        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        user_id UUID UNIQUE REFERENCES users(id) ON DELETE SET NULL,
         assigned_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('  ✔ Created table: phone_numbers');
+    console.log('  ✔ Verified table: phone_numbers (pool & assignment tracker)');
 
-    // 3. Contacts Table
+    // 3. Contacts Table (Enforces unique contact mapping per user)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS contacts (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -50,7 +50,7 @@ async function initDB() {
         UNIQUE(user_id, caller_number)
       );
     `);
-    console.log('  ✔ Created table: contacts');
+    console.log('  ✔ Verified table: contacts');
 
     // 4. Subscriptions Table
     await pool.query(`
@@ -65,7 +65,7 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('  ✔ Created table: subscriptions');
+    console.log('  ✔ Verified table: subscriptions');
 
     console.log('[DB INIT] Database initialization complete!');
   } catch (err) {
