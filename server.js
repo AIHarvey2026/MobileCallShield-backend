@@ -86,7 +86,7 @@ app.post('/voice', async (req, res) => {
 
 // 2. PIN VERIFICATION ENDPOINT
 app.post('/verify-pin', (req, res) => {
-    const twiml = new twilio.twiml.VoiceResponse();
+    const twiml = new twilio.twiml.VoiceResponse(); // Fixed from twirl
     const enteredPin = req.body.Digits;
     const ownerPhone = req.query.ownerPhone || process.env.PERSONAL_PHONE_NUMBER;
 
@@ -104,6 +104,43 @@ app.post('/verify-pin', (req, res) => {
     res.send(twiml.toString());
 });
 
+// Check if user exist or new user will be register
+app.post('/api/register', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+       
+        // Step 1: Check if the email already exists
+        const existingUser = await pool.query('SELECT id FROM public.users WHERE email = $1', [email]);
+       
+        if (existingUser.rows.length > 0) {
+            // Email IS found -> Reject registration
+            return res.status(400).json({ success: false, error: "Email is already in use." });
+        }
+       
+        // Step 2: No email found -> Run the INSERT statement
+        const insertQuery = `
+            INSERT INTO public.users (email, password, role, status)
+            VALUES ($1, $2, 'user', 'trialing')
+            RETURNING id, email, created_at;
+        `;
+       
+        const result = await pool.query(insertQuery, [email, password]);
+        const newUser = result.rows[0];
+
+        // Step 3: Return the new integer ID back to the app
+        res.status(201).json({
+            success: true,
+            userId: newUser.id, // e.g., 2, 3, etc.
+            email: newUser.email,
+            message: "User registered successfully!"
+        });
+       
+    } catch (err) {
+        console.error("[REGISTER ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
     try {
@@ -114,22 +151,21 @@ app.post('/api/contacts', async (req, res) => {
         const phoneNumber = req.body.phoneNumber || req.body.phone_number;
         const isGuardian = req.body.isGuardian !== undefined ? req.body.isGuardian : req.body.is_guardian;
 
-        // Simple regex check to verify if incoming userId is a valid UUID
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!userId || !uuidRegex.test(userId)) {
-            // Fallback default test UUID if the app hasn't set up real UUID auth yet
-            userId = "00000000-0000-0000-0000-000000000001";
+        // Parse and validate incoming userId as an integer, fallback to test user ID 1
+        userId = parseInt(userId, 10);
+        if (isNaN(userId) || userId <= 0) {
+            userId = 1; // Default fallback to our test user
         }
 
         const query = `
-            INSERT INTO public.trusted_contacts (id, user_id, name, phone_number, is_guardian)
-            VALUES (gen_random_uuid(), $1, $2, $3, $4)
+            INSERT INTO public.trusted_contacts (user_id, name, phone_number, is_guardian)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (user_id, phone_number)
             DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian
             RETURNING *
         `;
         const values = [userId, name, phoneNumber, isGuardian ?? false];
-       
+        
         const result = await pool.query(query, values);
         res.status(200).json({ success: true, contact: result.rows[0] });
     } catch (err) {
