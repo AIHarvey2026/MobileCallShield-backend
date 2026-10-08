@@ -141,6 +141,39 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
+// 4. USER LOGIN ENDPOINT
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Check if user exists with matching email and password
+        const result = await pool.query(
+            'SELECT id, email FROM public.users WHERE email = $1 AND password = $2',
+            [email, password]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({ success: false, error: "Invalid email or password." });
+        }
+
+        const user = result.rows[0];
+
+        // Return user object containing the integer ID expected by the Android app
+        res.status(200).json({
+            success: true,
+            user: {
+                id: user.id,   // Integer ID from PostgreSQL SERIAL schema
+                email: user.email
+            },
+            message: "Login successful!"
+        });
+
+    } catch (err) {
+        console.error("[LOGIN ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
     try {
