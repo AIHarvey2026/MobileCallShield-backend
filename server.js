@@ -209,6 +209,28 @@ app.post('/api/contacts', async (req, res) => {
     }
 });
 
+// 5. GET CONTACTS ENDPOINT FOR ANDROID APP
+app.get('/api/contacts', async (req, res) => {
+    try {
+        let userId = req.query.userId;
+        userId = parseInt(userId, 10);
+        if (isNaN(userId) || userId <= 0) {
+            userId = 1; // Fallback
+        }
+
+        const result = await pool.query(
+            'SELECT id, user_id AS "userId", name, phone_number AS "phoneNumber", is_guardian AS "isGuardian" FROM public.trusted_contacts WHERE user_id = $1 ORDER BY id DESC',
+            [userId]
+        );
+
+        // Matches the ContactsResponse structure expected by Retrofit
+        res.status(200).json({ success: true, contacts: result.rows });
+    } catch (err) {
+        console.error("[GET CONTACTS ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`[SERVER] Senior Scam Shield backend running on port ${PORT}`);
