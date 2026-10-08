@@ -231,6 +231,35 @@ app.get('/api/contacts', async (req, res) => {
     }
 });
 
+// 6. UPDATE USER PIN ENDPOINT
+app.post('/api/users/pin', async (req, res) => {
+    try {
+        let userId = req.body.userId || req.body.user_id;
+        const newPin = req.body.pin;
+
+        userId = parseInt(userId, 10);
+        if (isNaN(userId) || userId <= 0) {
+            userId = 1;
+        }
+
+        if (!newPin || newPin.length !== 4 || isNaN(newPin)) {
+            return res.status(400).json({ success: false, error: "PIN must be a 4-digit number." });
+        }
+
+        await pool.query(
+            'UPDATE public.users SET pin = $1 WHERE id = $2',
+            [newPin, userId]
+        );
+
+        console.log(`[PIN UPDATE] User ${userId} updated their PIN.`);
+        res.status(200).json({ success: true, message: "PIN updated successfully!" });
+    } catch (err) {
+        console.error("[PIN UPDATE ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`[SERVER] Senior Scam Shield backend running on port ${PORT}`);
