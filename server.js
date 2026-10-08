@@ -152,11 +152,15 @@ app.post('/api/auth/login', async (req, res) => {
             [email, password]
         );
 
+        Log.d("LOGIN_DEBUG", "Sending Login -> Email: $email, Password: $password")
+
         if (result.rows.length === 0) {
             return res.status(401).json({ success: false, error: "Invalid email or password." });
         }
 
         const user = result.rows[0];
+
+
 
         // Return user object containing the integer ID expected by the Android app
         res.status(200).json({
