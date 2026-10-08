@@ -152,8 +152,6 @@ app.post('/api/auth/login', async (req, res) => {
             [email, password]
         );
 
-        Log.d("LOGIN_DEBUG", "Sending Login -> Email: $email, Password: $password")
-
         if (result.rows.length === 0) {
             return res.status(401).json({ success: false, error: "Invalid email or password." });
         }
