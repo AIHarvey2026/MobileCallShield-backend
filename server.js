@@ -26,19 +26,20 @@ app.post('/voice', async (req, res) => {
     console.log(`[INCOMING CALL] From: ${callerNumber} to Shield: ${shieldNumber}`);
 
     try {
-        // Find which user owns this shield number using the correct column name: phone_number
+        // Find which user owns this shield number, their personal phone, and their custom passcode
         const userResult = await pool.query(
-            `SELECT u.id as user_id, u.owner_phone FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
+            `SELECT u.id as user_id, u.owner_phone, u.passcode FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
             [shieldNumber]
         );
 
-        // Fallback for single-tenant / local testing if phone_numbers table isn't seeded yet
         let userId = null;
         let ownerPhone = process.env.PERSONAL_PHONE_NUMBER;
+        let userPasscode = DEFAULT_MASTER_PIN;
 
         if (userResult.rows.length > 0) {
             userId = userResult.rows[0].user_id;
             ownerPhone = userResult.rows[0].owner_phone || process.env.PERSONAL_PHONE_NUMBER;
+            userPasscode = userResult.rows[0].passcode || DEFAULT_MASTER_PIN;
         }
 
         let isTrusted = false;
@@ -51,7 +52,7 @@ app.post('/voice', async (req, res) => {
             );
             if (contactResult.rows.length > 0) {
                 isTrusted = true;
-                console.log(`[TRUSTED] Caller found in database for user ${userId}. Bypassing PIN.`);
+                console.log(`[TRUSTED] Caller found in database for user ${userId}. Bypassing passcode.`);
             }
         }
 
@@ -59,16 +60,16 @@ app.post('/voice', async (req, res) => {
             twiml.say({ voice: 'alice' }, "Connecting your call.");
             twiml.dial(ownerPhone);
         } else {
-            console.log("[UNKNOWN CALLER] Prompting for 4-digit PIN.");
+            console.log("[UNKNOWN CALLER] Prompting for security passcode.");
             const gather = twiml.gather({
                 numDigits: 4,
-                action: `/verify-pin?ownerPhone=${encodeURIComponent(ownerPhone)}`,
+                action: `/verify-pin?ownerPhone=${encodeURIComponent(ownerPhone)}&expectedPasscode=${encodeURIComponent(userPasscode)}`,
                 method: 'POST',
                 timeout: 10
             });
             gather.say(
                 { voice: 'alice' },
-                "Please enter your four-digit security PIN on your phone keypad to reach this household."
+                "Please enter your four-digit security passcode on your phone keypad to reach this household."
             );
 
             twiml.say({ voice: 'alice' }, "No input received. Goodbye.");
@@ -84,19 +85,20 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// 2. PIN VERIFICATION ENDPOINT
+// 2. PIN / PASSCODE VERIFICATION ENDPOINT
 app.post('/verify-pin', (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const enteredPin = req.body.Digits;
     const ownerPhone = req.query.ownerPhone || process.env.PERSONAL_PHONE_NUMBER;
+    const expectedPasscode = req.query.expectedPasscode || DEFAULT_MASTER_PIN;
 
     console.log(`[PIN VERIFY] Entered digits: ${enteredPin}`);
 
-    if (enteredPin === DEFAULT_MASTER_PIN) {
-        twiml.say({ voice: 'alice' }, "PIN accepted. Connecting your call now.");
+    if (enteredPin === expectedPasscode) {
+        twiml.say({ voice: 'alice' }, "Passcode accepted. Connecting your call now.");
         twiml.dial(ownerPhone);
     } else {
-        twiml.say({ voice: 'alice' }, "Incorrect PIN. Goodbye.");
+        twiml.say({ voice: 'alice' }, "Incorrect passcode. Goodbye.");
         twiml.hangup();
     }
 
@@ -231,81 +233,4 @@ app.post('/api/auth/signin', async (req, res) => {
         }
 
         res.status(200).json({
-            success: true,
-            assignedPhoneNumber: assignedNumber.phone_number,
-            label: assignedNumber.label
-        });
-
-    } catch (err) {
-        console.error("Error during phone number assignment:", err);
-        res.status(500).json({ error: "Internal server error" });
-    }
-});
-
-// 7. GET CONTACTS ENDPOINT
-app.get('/api/contacts', async (req, res) => {
-    try {
-        let userId = req.query.userId;
-        userId = parseInt(userId, 10);
-        if (isNaN(userId) || userId <= 0) {
-            userId = 1;
-        }
-
-        const result = await pool.query(
-            'SELECT id, user_id AS "userId", name, phone_number AS "phoneNumber", is_guardian AS "isGuardian" FROM public.trusted_contacts WHERE user_id = $1 ORDER BY id DESC',
-            [userId]
-        );
-
-        res.status(200).json({ success: true, contacts: result.rows });
-    } catch (err) {
-        console.error("[GET CONTACTS ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// 8. UPDATE USER PIN ENDPOINT
-app.post('/api/users/pin', async (req, res) => {
-    try {
-        let userId = req.body.userId || req.body.user_id;
-        const newPin = req.body.pin;
-
-        userId = parseInt(userId, 10);
-        if (isNaN(userId) || userId <= 0) {
-            userId = 1;
-        }
-
-        if (!newPin || newPin.length !== 4 || isNaN(newPin)) {
-            return res.status(400).json({ success: false, error: "PIN must be a 4-digit number." });
-        }
-
-        await pool.query(
-            'UPDATE public.users SET pin = $1 WHERE id = $2',
-            [newPin, userId]
-        );
-
-        console.log(`[PIN UPDATE] User ${userId} updated their PIN.`);
-        res.status(200).json({ success: true, message: "PIN updated successfully!" });
-    } catch (err) {
-        console.error("[PIN UPDATE ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// 9. CALL LOGS ENDPOINT
-app.get('/api/call-logs/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const result = await pool.query(
-            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-            [userId]
-        );
-        res.json({ success: true, logs: result.rows });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`[SERVER] Senior Scam Shield backend running on port ${PORT}`);
-});
+            success:
