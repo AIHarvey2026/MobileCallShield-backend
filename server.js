@@ -233,4 +233,125 @@ app.post('/api/auth/signin', async (req, res) => {
         }
 
         res.status(200).json({
-            success:
+            success: true,
+            assignedPhoneNumber: assignedNumber.phone_number,
+            label: assignedNumber.label
+        });
+
+    } catch (err) {
+        console.error("Error during phone number assignment:", err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// 7. GET CONTACTS ENDPOINT
+app.get('/api/contacts', async (req, res) => {
+    try {
+        let userId = req.query.userId;
+        userId = parseInt(userId, 10);
+        if (isNaN(userId) || userId <= 0) {
+            userId = 1;
+        }
+
+        const result = await pool.query(
+            'SELECT id, user_id AS "userId", name, phone_number AS "phoneNumber", is_guardian AS "isGuardian" FROM public.trusted_contacts WHERE user_id = $1 ORDER BY id DESC',
+            [userId]
+        );
+
+        res.status(200).json({ success: true, contacts: result.rows });
+    } catch (err) {
+        console.error("[GET CONTACTS ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 8. UPDATE USER PIN / PASSCODE ENDPOINT
+app.post('/api/users/pin', async (req, res) => {
+    try {
+        let userId = req.body.userId || req.body.user_id;
+        const newPin = req.body.pin || req.body.passcode;
+
+        userId = parseInt(userId, 10);
+        if (isNaN(userId) || userId <= 0) {
+            userId = 1;
+        }
+
+        if (!newPin || newPin.length !== 4 || isNaN(newPin)) {
+            return res.status(400).json({ success: false, error: "Passcode must be a 4-digit number." });
+        }
+
+        await pool.query(
+            'UPDATE public.users SET passcode = $1 WHERE id = $2',
+            [newPin, userId]
+        );
+
+        console.log(`[PASSCODE UPDATE] User ${userId} updated their security passcode.`);
+        res.status(200).json({ success: true, message: "Passcode updated successfully!" });
+    } catch (err) {
+        console.error("[PASSCODE UPDATE ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 9. CALL LOGS ENDPOINT
+app.get('/api/call-logs/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(
+            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+            [userId]
+        );
+        res.json({ success: true, logs: result.rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 10. UPDATE USER PHONE NUMBER ENDPOINT
+app.post('/api/users/phone-number', async (req, res) => {
+    try {
+        let userId = req.body.userId || req.body.user_id;
+        const newPhoneNumber = req.body.newPhoneNumber || req.body.new_phone_number;
+
+        userId = parseInt(userId, 10);
+        if (isNaN(userId) || userId <= 0) {
+            return res.status(400).json({ success: false, error: "Invalid user ID." });
+        }
+
+        if (!newPhoneNumber) {
+            return res.status(400).json({ success: false, error: "New phone number is required." });
+        }
+
+        await pool.query(
+            'UPDATE public.users SET owner_phone = $1 WHERE id = $2',
+            [newPhoneNumber, userId]
+        );
+
+        console.log(`[PHONE UPDATE] User ${userId} updated their personal phone number to ${newPhoneNumber}.`);
+        res.status(200).json({ success: true, message: "Phone number updated successfully!" });
+
+    } catch (err) {
+        console.error("[PHONE UPDATE ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 11. GET APP SETTINGS ENDPOINT (Fetches dynamic configurations like support email and logo)
+app.get('/api/settings', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM public.app_settings LIMIT 1');
+        
+        res.status(200).json({ 
+            success: true, 
+            settings: result.rows[0] || {} 
+        });
+    } catch (err) {
+        console.error("[SETTINGS ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`[SERVER] Senior Scam Shield backend running on port ${PORT}`);
+});
