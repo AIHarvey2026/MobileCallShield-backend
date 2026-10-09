@@ -26,9 +26,9 @@ app.post('/voice', async (req, res) => {
     console.log(`[INCOMING CALL] From: ${callerNumber} to Shield: ${shieldNumber}`);
 
     try {
-        // Find which user owns this shield number
+        // Find which user owns this shield number using the correct column name: phone_number
         const userResult = await pool.query(
-            `SELECT u.id as user_id, u.owner_phone FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.shield_number = $1`,
+            `SELECT u.id as user_id, u.owner_phone FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
             [shieldNumber]
         );
 
@@ -86,7 +86,7 @@ app.post('/voice', async (req, res) => {
 
 // 2. PIN VERIFICATION ENDPOINT
 app.post('/verify-pin', (req, res) => {
-    const twiml = new twilio.twiml.VoiceResponse(); // Fixed from twirl
+    const twiml = new twilio.twiml.VoiceResponse();
     const enteredPin = req.body.Digits;
     const ownerPhone = req.query.ownerPhone || process.env.PERSONAL_PHONE_NUMBER;
 
@@ -104,20 +104,17 @@ app.post('/verify-pin', (req, res) => {
     res.send(twiml.toString());
 });
 
-// Check if user exist or new user will be register
+// 3. REGISTER ENDPOINT
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
        
-        // Step 1: Check if the email already exists
         const existingUser = await pool.query('SELECT id FROM public.users WHERE email = $1', [email]);
        
         if (existingUser.rows.length > 0) {
-            // Email IS found -> Reject registration
             return res.status(400).json({ success: false, error: "Email is already in use." });
         }
        
-        // Step 2: No email found -> Run the INSERT statement
         const insertQuery = `
             INSERT INTO public.users (email, password, role, status)
             VALUES ($1, $2, 'user', 'trialing')
@@ -127,10 +124,9 @@ app.post('/api/register', async (req, res) => {
         const result = await pool.query(insertQuery, [email, password]);
         const newUser = result.rows[0];
 
-        // Step 3: Return the new integer ID back to the app
         res.status(201).json({
             success: true,
-            userId: newUser.id, // e.g., 2, 3, etc.
+            userId: newUser.id,
             email: newUser.email,
             message: "User registered successfully!"
         });
@@ -146,7 +142,6 @@ app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // Check if user exists with matching email and password
         const result = await pool.query(
             'SELECT id, email FROM public.users WHERE email = $1 AND password = $2',
             [email, password]
@@ -158,13 +153,10 @@ app.post('/api/auth/login', async (req, res) => {
 
         const user = result.rows[0];
 
-
-
-        // Return user object containing the integer ID expected by the Android app
         res.status(200).json({
             success: true,
             user: {
-                id: user.id,   // Integer ID from PostgreSQL SERIAL schema
+                id: user.id,
                 email: user.email
             },
             message: "Login successful!"
@@ -176,20 +168,17 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// 3. API ENDPOINT FOR ANDROID APP TO SYNC CONTACTS (WITH UPSERT)
+// 5. API ENDPOINT FOR CONTACTS SYNC (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
     try {
-        console.log("[API CONTACT BODY RECEIVED]", req.body);
-
         let userId = req.body.userId || req.body.user_id;
         const name = req.body.name;
         const phoneNumber = req.body.phoneNumber || req.body.phone_number;
         const isGuardian = req.body.isGuardian !== undefined ? req.body.isGuardian : req.body.is_guardian;
 
-        // Parse and validate incoming userId as an integer, fallback to test user ID 1
         userId = parseInt(userId, 10);
         if (isNaN(userId) || userId <= 0) {
-            userId = 1; // Default fallback to our test user
+            userId = 1;
         }
 
         const query = `
@@ -209,13 +198,57 @@ app.post('/api/contacts', async (req, res) => {
     }
 });
 
-// 5. GET CONTACTS ENDPOINT FOR ANDROID APP
+// 6. PHONE NUMBER ASSIGNMENT SIGN-IN/SYNC ENDPOINT
+app.post('/api/auth/signin', async (req, res) => {
+    const { deviceId, userPhoneNumber } = req.body;
+
+    try {
+        let queryResult = await pool.query(
+            'SELECT * FROM phone_numbers WHERE user_id = $1 AND is_active = true LIMIT 1',
+            [deviceId]
+        );
+
+        let assignedNumber = queryResult.rows[0];
+
+        if (!assignedNumber) {
+            const assignmentResult = await pool.query(`
+                UPDATE phone_numbers 
+                SET user_id = $1, is_active = true 
+                WHERE id = (
+                    SELECT id FROM phone_numbers 
+                    WHERE user_id IS NULL 
+                    LIMIT 1 
+                    FOR UPDATE
+                )
+                RETURNING *;
+            `, [deviceId]);
+
+            if (assignmentResult.rows.length === 0) {
+                return res.status(400).json({ error: "No available phone numbers in the pool. Please add more." });
+            }
+
+            assignedNumber = assignmentResult.rows[0];
+        }
+
+        res.status(200).json({
+            success: true,
+            assignedPhoneNumber: assignedNumber.phone_number,
+            label: assignedNumber.label
+        });
+
+    } catch (err) {
+        console.error("Error during phone number assignment:", err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
+
+// 7. GET CONTACTS ENDPOINT
 app.get('/api/contacts', async (req, res) => {
     try {
         let userId = req.query.userId;
         userId = parseInt(userId, 10);
         if (isNaN(userId) || userId <= 0) {
-            userId = 1; // Fallback
+            userId = 1;
         }
 
         const result = await pool.query(
@@ -223,7 +256,6 @@ app.get('/api/contacts', async (req, res) => {
             [userId]
         );
 
-        // Matches the ContactsResponse structure expected by Retrofit
         res.status(200).json({ success: true, contacts: result.rows });
     } catch (err) {
         console.error("[GET CONTACTS ERROR]", err.message);
@@ -231,7 +263,7 @@ app.get('/api/contacts', async (req, res) => {
     }
 });
 
-// 6. UPDATE USER PIN ENDPOINT
+// 8. UPDATE USER PIN ENDPOINT
 app.post('/api/users/pin', async (req, res) => {
     try {
         let userId = req.body.userId || req.body.user_id;
@@ -259,7 +291,7 @@ app.post('/api/users/pin', async (req, res) => {
     }
 });
 
-// Example Express route for call logs
+// 9. CALL LOGS ENDPOINT
 app.get('/api/call-logs/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
