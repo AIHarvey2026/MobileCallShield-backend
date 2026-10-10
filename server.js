@@ -30,18 +30,35 @@ app.post('/voice', async (req, res) => {
 
     try {
         const userResult = await pool.query(
-            `SELECT u.id as user_id, u.owner_phone, u.passcode FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
+            `SELECT u.id as user_id, u.owner_phone, u.passcode, u.is_family, u.subscription_status, u.trial_ends_at FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
             [shieldNumber]
         );
 
         let userId = null;
         let ownerPhone = process.env.PERSONAL_PHONE_NUMBER;
         let userPasscode = DEFAULT_MASTER_PIN;
+        let isFamily = false;
+        let userStatus = 'trialing';
+        let trialEndsAt = new Date();
 
         if (userResult.rows.length > 0) {
             userId = userResult.rows[0].user_id;
             ownerPhone = userResult.rows[0].owner_phone || process.env.PERSONAL_PHONE_NUMBER;
             userPasscode = userResult.rows[0].passcode || DEFAULT_MASTER_PIN;
+            isFamily = userResult.rows[0].is_family || false;
+            userStatus = userResult.rows[0].subscription_status || 'trialing';
+            trialEndsAt = userResult.rows[0].trial_ends_at ? new Date(userResult.rows[0].trial_ends_at) : new Date();
+        }
+
+        // Access Gate: Allow if family, active subscription, or active 14-day trial
+        const hasAccess = isFamily || userStatus === 'active' || (userStatus === 'trialing' && trialEndsAt > new Date());
+
+        if (userId && !hasAccess) {
+            console.log(`[ACCESS DENIED] User ${userId} subscription/trial has expired.`);
+            twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Please renew in the app. Goodbye.");
+            twiml.hangup();
+            res.type('text/xml');
+            return res.send(twiml.toString());
         }
 
         let isTrusted = false;
@@ -63,7 +80,7 @@ app.post('/voice', async (req, res) => {
         } else {
             console.log("[UNKNOWN CALLER] Prompting for security passcode.");
 
-            // OPTIONAL: If this unknown caller is flagged as HIGH RISK, notify guardians via SMS
+            // OPTIONAL: If this unknown caller attempts a call, notify guardians via SMS
             if (userId) {
                 const guardiansResult = await pool.query(
                     'SELECT guardian_name, guardian_phone FROM public.user_guardians WHERE user_id = $1 AND guardian_phone IS NOT NULL',
@@ -107,34 +124,6 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Inside your call screening or feature access check:
-const userRow = userResult.rows[0];
-const isFamily = userRow.is_family;
-const userStatus = userRow.subscription_status;
-const trialEndsAt = new Date(userRow.trial_ends_at);
-
-// Grant access if they are flagged as family OR have an active trial/subscription
-const hasAccess = isFamily || userStatus === 'active' || (userStatus === 'trialing' && trialEndsAt > new Date());
-
-if (!hasAccess) {
-    console.log(`[ACCESS DENIED] User ${userId} trial/subscription has expired.`);
-    twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Goodbye.");
-    twiml.hangup();
-    res.type('text/xml');
-    return res.send(twiml.toString());
-}
-// Check user trial/subscription status in /voice route
-const userStatus = userResult.rows[0].subscription_status;
-const trialEndsAt = new Date(userResult.rows[0].trial_ends_at);
-
-if (userStatus === 'expired' || (userStatus === 'trialing' && trialEndsAt < new Date())) {
-    console.log(`[ACCESS DENIED] User ${userId} trial/subscription has expired.`);
-    twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Goodbye.");
-    twiml.hangup();
-    res.type('text/xml');
-    return res.send(twiml.toString());
-}
-
 // 2. PIN / PASSCODE VERIFICATION ENDPOINT
 app.post('/verify-pin', (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
@@ -154,40 +143,6 @@ app.post('/verify-pin', (req, res) => {
 
     res.type('text/xml');
     res.send(twiml.toString());
-let userId = null;
-        let ownerPhone = process.env.PERSONAL_PHONE_NUMBER;
-        let userPasscode = DEFAULT_MASTER_PIN;
-        let isFamily = false;
-        let userStatus = 'trialing';
-        let trialEndsAt = new Date();
-
-        if (userResult.rows.length > 0) {
-            userId = userResult.rows[0].user_id;
-            ownerPhone = userResult.rows[0].owner_phone || process.env.PERSONAL_PHONE_NUMBER;
-            userPasscode = userResult.rows[0].passcode || DEFAULT_MASTER_PIN;
-            
-            // Fetch subscription & family flags from user record if available
-            const subCheck = await pool.query(
-                'SELECT is_family, subscription_status, trial_ends_at FROM public.users WHERE id = $1',
-                [userId]
-            );
-            if (subCheck.rows.length > 0) {
-                isFamily = subCheck.rows[0].is_family || false;
-                userStatus = subCheck.rows[0].subscription_status || 'trialing';
-                trialEndsAt = subCheck.rows[0].trial_ends_at ? new Date(subCheck.rows[0].trial_ends_at) : new Date();
-            }
-        }
-
-        // Access Gate: Allow if family, active subscription, or active 14-day trial
-        const hasAccess = isFamily || userStatus === 'active' || (userStatus === 'trialing' && trialEndsAt > new Date());
-
-        if (userId && !hasAccess) {
-            console.log(`[ACCESS DENIED] User ${userId} subscription/trial has expired.`);
-            twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Please renew in the app. Goodbye.");
-            twiml.hangup();
-            res.type('text/xml');
-            return res.send(twiml.toString());
-        }
 });
 
 // 3. REGISTER ENDPOINT
