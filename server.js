@@ -26,7 +26,6 @@ app.post('/voice', async (req, res) => {
     console.log(`[INCOMING CALL] From: ${callerNumber} to Shield: ${shieldNumber}`);
 
     try {
-        // Find which user owns this shield number, their personal phone, and their custom passcode
         const userResult = await pool.query(
             `SELECT u.id as user_id, u.owner_phone, u.passcode FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
             [shieldNumber]
@@ -45,7 +44,6 @@ app.post('/voice', async (req, res) => {
         let isTrusted = false;
 
         if (userId) {
-            // Check if caller is in this user's trusted contacts list
             const contactResult = await pool.query(
                 `SELECT is_guardian FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
                 [userId, callerNumber]
@@ -110,19 +108,19 @@ app.post('/verify-pin', (req, res) => {
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
-       
+        
         const existingUser = await pool.query('SELECT id FROM public.users WHERE email = $1', [email]);
-       
+        
         if (existingUser.rows.length > 0) {
             return res.status(400).json({ success: false, error: "Email is already in use." });
         }
-       
+        
         const insertQuery = `
             INSERT INTO public.users (email, password, role, status)
             VALUES ($1, $2, 'user', 'trialing')
             RETURNING id, email, created_at;
         `;
-       
+        
         const result = await pool.query(insertQuery, [email, password]);
         const newUser = result.rows[0];
 
@@ -132,7 +130,7 @@ app.post('/api/register', async (req, res) => {
             email: newUser.email,
             message: "User registered successfully!"
         });
-       
+        
     } catch (err) {
         console.error("[REGISTER ERROR]", err.message);
         res.status(500).json({ success: false, error: err.message });
@@ -336,7 +334,7 @@ app.post('/api/users/phone-number', async (req, res) => {
     }
 });
 
-// 11. GET APP SETTINGS ENDPOINT (Fetches dynamic configurations like support email and logo)
+// 11. GET APP SETTINGS ENDPOINT
 app.get('/api/settings', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM public.app_settings LIMIT 1');
