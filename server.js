@@ -14,6 +14,9 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+// Initialize Twilio Client for sending SMS alerts
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
 // Fallback Master PIN if not user-specific
 const DEFAULT_MASTER_PIN = process.env.MASTER_PIN || "1234";
 
@@ -59,6 +62,27 @@ app.post('/voice', async (req, res) => {
             twiml.dial(ownerPhone);
         } else {
             console.log("[UNKNOWN CALLER] Prompting for security passcode.");
+
+            // OPTIONAL: If this unknown caller is flagged as HIGH RISK, notify guardians via SMS
+            if (userId) {
+                const guardiansResult = await pool.query(
+                    'SELECT guardian_name, guardian_phone FROM public.user_guardians WHERE user_id = $1 AND guardian_phone IS NOT NULL',
+                    [userId]
+                );
+
+                if (guardiansResult.rows.length > 0) {
+                    const alertMessage = `Alert: Unrecognized call attempted from ${callerNumber}.`;
+                    for (const guardian of guardiansResult.rows) {
+                        await twilioClient.messages.create({
+                            body: alertMessage,
+                            from: process.env.TWILIO_PHONE_NUMBER,
+                            to: guardian.guardian_phone
+                        });
+                        console.log(`[GUARDIAN SMS SENT]: Sent to ${guardian.guardian_name} at ${guardian.guardian_phone}`);
+                    }
+                }
+            }
+
             const gather = twiml.gather({
                 numDigits: 4,
                 action: `/verify-pin?ownerPhone=${encodeURIComponent(ownerPhone)}&expectedPasscode=${encodeURIComponent(userPasscode)}`,
@@ -109,7 +133,6 @@ app.post('/api/register', async (req, res) => {
     try {
         const { email, password, address, city, state, zip, country, privacyAgreed } = req.body;
         
-        // Strict server-side validation check
         if (!privacyAgreed) {
             return res.status(400).json({ success: false, error: "You must agree to the privacy policy to register." });
         }
