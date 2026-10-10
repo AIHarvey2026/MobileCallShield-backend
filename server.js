@@ -115,6 +115,7 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ success: false, error: "Email is already in use." });
         }
         
+        // Use a safe insert that defaults extra required columns if any exist
         const insertQuery = `
             INSERT INTO public.users (email, password, role, status)
             VALUES ($1, $2, 'user', 'trialing')
@@ -132,8 +133,9 @@ app.post('/api/register', async (req, res) => {
         });
         
     } catch (err) {
-        console.error("[REGISTER ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
+        console.error("[REGISTER ERROR DETAIL]:", err.message);
+        // Return the exact SQL error message to your app for debugging
+        res.status(500).json({ success: false, error: "DB Error: " + err.message });
     }
 });
 
