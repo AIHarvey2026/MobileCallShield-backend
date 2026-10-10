@@ -107,6 +107,34 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
+// Inside your call screening or feature access check:
+const userRow = userResult.rows[0];
+const isFamily = userRow.is_family;
+const userStatus = userRow.subscription_status;
+const trialEndsAt = new Date(userRow.trial_ends_at);
+
+// Grant access if they are flagged as family OR have an active trial/subscription
+const hasAccess = isFamily || userStatus === 'active' || (userStatus === 'trialing' && trialEndsAt > new Date());
+
+if (!hasAccess) {
+    console.log(`[ACCESS DENIED] User ${userId} trial/subscription has expired.`);
+    twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Goodbye.");
+    twiml.hangup();
+    res.type('text/xml');
+    return res.send(twiml.toString());
+}
+// Check user trial/subscription status in /voice route
+const userStatus = userResult.rows[0].subscription_status;
+const trialEndsAt = new Date(userResult.rows[0].trial_ends_at);
+
+if (userStatus === 'expired' || (userStatus === 'trialing' && trialEndsAt < new Date())) {
+    console.log(`[ACCESS DENIED] User ${userId} trial/subscription has expired.`);
+    twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Goodbye.");
+    twiml.hangup();
+    res.type('text/xml');
+    return res.send(twiml.toString());
+}
+
 // 2. PIN / PASSCODE VERIFICATION ENDPOINT
 app.post('/verify-pin', (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
@@ -126,6 +154,40 @@ app.post('/verify-pin', (req, res) => {
 
     res.type('text/xml');
     res.send(twiml.toString());
+let userId = null;
+        let ownerPhone = process.env.PERSONAL_PHONE_NUMBER;
+        let userPasscode = DEFAULT_MASTER_PIN;
+        let isFamily = false;
+        let userStatus = 'trialing';
+        let trialEndsAt = new Date();
+
+        if (userResult.rows.length > 0) {
+            userId = userResult.rows[0].user_id;
+            ownerPhone = userResult.rows[0].owner_phone || process.env.PERSONAL_PHONE_NUMBER;
+            userPasscode = userResult.rows[0].passcode || DEFAULT_MASTER_PIN;
+            
+            // Fetch subscription & family flags from user record if available
+            const subCheck = await pool.query(
+                'SELECT is_family, subscription_status, trial_ends_at FROM public.users WHERE id = $1',
+                [userId]
+            );
+            if (subCheck.rows.length > 0) {
+                isFamily = subCheck.rows[0].is_family || false;
+                userStatus = subCheck.rows[0].subscription_status || 'trialing';
+                trialEndsAt = subCheck.rows[0].trial_ends_at ? new Date(subCheck.rows[0].trial_ends_at) : new Date();
+            }
+        }
+
+        // Access Gate: Allow if family, active subscription, or active 14-day trial
+        const hasAccess = isFamily || userStatus === 'active' || (userStatus === 'trialing' && trialEndsAt > new Date());
+
+        if (userId && !hasAccess) {
+            console.log(`[ACCESS DENIED] User ${userId} subscription/trial has expired.`);
+            twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Please renew in the app. Goodbye.");
+            twiml.hangup();
+            res.type('text/xml');
+            return res.send(twiml.toString());
+        }
 });
 
 // 3. REGISTER ENDPOINT
@@ -381,6 +443,31 @@ app.get('/api/settings', async (req, res) => {
         });
     } catch (err) {
         console.error("[SETTINGS ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 12. SYNC SUBSCRIPTION STATUS FROM APP STOREKIT 2
+app.post('/api/subscription/sync', async (req, res) => {
+    try {
+        const { userId, originalTransactionId, expirationDate, isTrial } = req.body;
+        
+        const expDate = new Date(expirationDate * 1000);
+        const status = expDate > new Date() ? (isTrial ? 'trialing' : 'active') : 'expired';
+
+        await pool.query(
+            `UPDATE public.users 
+             SET subscription_status = $1, 
+                 original_transaction_id = $2, 
+                 trial_ends_at = $3 
+             WHERE id = $4`,
+            [status, originalTransactionId, expDate, userId]
+        );
+
+        console.log(`[SUBSCRIPTION SYNC] User ${userId} status updated to: ${status}`);
+        res.json({ success: true, status });
+    } catch (err) {
+        console.error('[SUBSCRIPTION SYNC ERROR]', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
