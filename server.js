@@ -107,22 +107,34 @@ app.post('/verify-pin', (req, res) => {
 // 3. REGISTER ENDPOINT
 app.post('/api/register', async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, address, city, state, zip, country, privacyAgreed } = req.body;
+        
+        // Strict server-side validation check
+        if (!privacyAgreed) {
+            return res.status(400).json({ success: false, error: "You must agree to the privacy policy to register." });
+        }
         
         const existingUser = await pool.query('SELECT id FROM public.users WHERE email = $1', [email]);
-        
         if (existingUser.rows.length > 0) {
             return res.status(400).json({ success: false, error: "Email is already in use." });
         }
         
-        // Use a safe insert that defaults extra required columns if any exist
         const insertQuery = `
-            INSERT INTO public.users (email, password, role, status)
-            VALUES ($1, $2, 'user', 'trialing')
+            INSERT INTO public.users (email, password, role, status, address, city, state, zip, country, privacy_agreed)
+            VALUES ($1, $2, 'user', 'trialing', $3, $4, $5, $6, $7, $8)
             RETURNING id, email, created_at;
         `;
         
-        const result = await pool.query(insertQuery, [email, password]);
+        const result = await pool.query(insertQuery, [
+            email, password, 
+            address || null, 
+            city || null, 
+            state || null, 
+            zip || null, 
+            country || 'United States',
+            privacyAgreed
+        ]);
+        
         const newUser = result.rows[0];
 
         res.status(201).json({
@@ -134,7 +146,6 @@ app.post('/api/register', async (req, res) => {
         
     } catch (err) {
         console.error("[REGISTER ERROR DETAIL]:", err.message);
-        // Return the exact SQL error message to your app for debugging
         res.status(500).json({ success: false, error: "DB Error: " + err.message });
     }
 });
