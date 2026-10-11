@@ -145,28 +145,30 @@ app.post('/verify-pin', (req, res) => {
     res.send(twiml.toString());
 });
 
-// 3. REGISTER ENDPOINT
+// 3. REGISTER ENDPOINT (Updated to use user_name and handle account recovery email)
 app.post('/api/register', async (req, res) => {
     try {
-        const { email, password, address, city, state, zip, country, privacyAgreed } = req.body;
+        const { username, password, email, address, city, state, zip, country, privacyAgreed } = req.body;
         
         if (!privacyAgreed) {
             return res.status(400).json({ success: false, error: "You must agree to the privacy policy to register." });
         }
         
-        const existingUser = await pool.query('SELECT id FROM public.users WHERE email = $1', [email]);
+        const existingUser = await pool.query('SELECT id FROM public.users WHERE user_name = $1', [username]);
         if (existingUser.rows.length > 0) {
-            return res.status(400).json({ success: false, error: "Email is already in use." });
+            return res.status(400).json({ success: false, error: "Username is already in use." });
         }
         
         const insertQuery = `
-            INSERT INTO public.users (email, password, role, status, address, city, state, zip, country, privacy_agreed)
-            VALUES ($1, $2, 'user', 'trialing', $3, $4, $5, $6, $7, $8)
-            RETURNING id, email, created_at;
+            INSERT INTO public.users (user_name, password, email, role, status, address, city, state, zip, country, privacy_agreed)
+            VALUES ($1, $2, $3, 'user', 'trialing', $4, $5, $6, $7, $8, $9)
+            RETURNING id, user_name, email, created_at;
         `;
         
         const result = await pool.query(insertQuery, [
-            email, password, 
+            username, 
+            password, 
+            email || null,
             address || null, 
             city || null, 
             state || null, 
@@ -180,7 +182,7 @@ app.post('/api/register', async (req, res) => {
         res.status(201).json({
             success: true,
             userId: newUser.id,
-            email: newUser.email,
+            username: newUser.user_name,
             message: "User registered successfully!"
         });
         
@@ -190,27 +192,29 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// 4. USER LOGIN ENDPOINT
+// 4. USER LOGIN ENDPOINT (Updated to query user_name)
 app.post('/api/auth/login', async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { username, password } = req.body;
 
         const result = await pool.query(
-            'SELECT id, email FROM public.users WHERE email = $1 AND password = $2',
-            [email, password]
+            'SELECT id, user_name, role FROM public.users WHERE user_name = $1 AND password = $2',
+            [username, password]
         );
 
         if (result.rows.length === 0) {
-            return res.status(401).json({ success: false, error: "Invalid email or password." });
+            return res.status(401).json({ success: false, error: "Invalid username or password." });
         }
 
         const user = result.rows[0];
 
         res.status(200).json({
             success: true,
+            userId: user.id,
+            role: user.role || 'user',
             user: {
                 id: user.id,
-                email: user.email
+                username: user.user_name
             },
             message: "Login successful!"
         });
@@ -221,7 +225,29 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// 5. API ENDPOINT FOR CONTACTS SYNC (WITH UPSERT)
+// 5. FORGOT PASSWORD ENDPOINT
+app.post('/api/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+        const userQuery = await pool.query('SELECT * FROM public.users WHERE email = $1', [email]);
+        
+        if (userQuery.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Email address not found in our system.' });
+        }
+
+        const user = userQuery.rows[0];
+        console.log(`[PASSWORD RESET] Password reset requested for user: ${user.user_name} at email: ${user.email}`);
+
+        // TODO: Integrate SendGrid or Nodemailer here to dispatch the actual reset link
+
+        res.status(200).json({ success: true, message: 'Password reset instructions sent to your email.' });
+    } catch (err) {
+        console.error("[FORGOT PASSWORD ERROR]", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 6. API ENDPOINT FOR CONTACTS SYNC (WITH UPSERT)
 app.post('/api/contacts', async (req, res) => {
     try {
         let userId = req.body.userId || req.body.user_id;
@@ -251,7 +277,7 @@ app.post('/api/contacts', async (req, res) => {
     }
 });
 
-// 6. PHONE NUMBER ASSIGNMENT SIGN-IN/SYNC ENDPOINT
+// 7. PHONE NUMBER ASSIGNMENT SIGN-IN/SYNC ENDPOINT
 app.post('/api/auth/signin', async (req, res) => {
     const { deviceId, userPhoneNumber } = req.body;
 
@@ -295,7 +321,7 @@ app.post('/api/auth/signin', async (req, res) => {
     }
 });
 
-// 7. GET CONTACTS ENDPOINT
+// 8. GET CONTACTS ENDPOINT
 app.get('/api/contacts', async (req, res) => {
     try {
         let userId = req.query.userId;
@@ -316,7 +342,7 @@ app.get('/api/contacts', async (req, res) => {
     }
 });
 
-// 8. UPDATE USER PIN / PASSCODE ENDPOINT
+// 9. UPDATE USER PIN / PASSCODE ENDPOINT
 app.post('/api/users/pin', async (req, res) => {
     try {
         let userId = req.body.userId || req.body.user_id;
@@ -344,7 +370,7 @@ app.post('/api/users/pin', async (req, res) => {
     }
 });
 
-// 9. CALL LOGS ENDPOINT
+// 10. CALL LOGS ENDPOINT
 app.get('/api/call-logs/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -358,7 +384,7 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     }
 });
 
-// 10. UPDATE USER PHONE NUMBER ENDPOINT
+// 11. UPDATE USER PHONE NUMBER ENDPOINT
 app.post('/api/users/phone-number', async (req, res) => {
     try {
         let userId = req.body.userId || req.body.user_id;
@@ -387,7 +413,7 @@ app.post('/api/users/phone-number', async (req, res) => {
     }
 });
 
-// 11. GET APP SETTINGS ENDPOINT
+// 12. GET APP SETTINGS ENDPOINT
 app.get('/api/settings', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM public.app_settings LIMIT 1');
@@ -402,7 +428,7 @@ app.get('/api/settings', async (req, res) => {
     }
 });
 
-// 12. SYNC SUBSCRIPTION STATUS FROM APP STOREKIT 2
+// 13. SYNC SUBSCRIPTION STATUS FROM APP STOREKIT 2
 app.post('/api/subscription/sync', async (req, res) => {
     try {
         const { userId, originalTransactionId, expirationDate, isTrial } = req.body;
