@@ -1,459 +1,223 @@
-require('dotenv').config();
 const express = require('express');
-const bodyParser = require('body-parser');
-const twilio = require('twilio');
+const cors = require('cors');
 const { Pool } = require('pg');
+const bcrypt = require('bcrypt');
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
 
-// PostgreSQL Connection Pool
+// ----------------------------------------------------
+// 1. Database Connection (PostgreSQL on Render)
+// ----------------------------------------------------
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Initialize Twilio Client for sending SMS alerts
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+// ----------------------------------------------------
+// 2. Middleware Configuration
+// ----------------------------------------------------
+// Allow requests from your Hostinger domain (and local testing)
+const allowedOrigins = [
+    'https://mobilecallshield.com',
+    'https://www.mobilecallshield.com',
+    'http://localhost:3000'
+];
 
-// Fallback Master PIN if not user-specific
-const DEFAULT_MASTER_PIN = process.env.MASTER_PIN || "1234";
-
-// 1. INCOMING CALL WEBHOOK (Hit by Twilio when a call rings your shield number)
-app.post('/voice', async (req, res) => {
-    const twiml = new twilio.twiml.VoiceResponse();
-    const callerNumber = req.body.From; // Who is calling
-    const shieldNumber = req.body.To;   // Your Twilio Shield phone number
-
-    console.log(`[INCOMING CALL] From: ${callerNumber} to Shield: ${shieldNumber}`);
-
-    try {
-        const userResult = await pool.query(
-            `SELECT u.id as user_id, u.owner_phone, u.passcode, u.is_family, u.subscription_status, u.trial_ends_at FROM phone_numbers p JOIN users u ON p.user_id = u.id WHERE p.phone_number = $1`,
-            [shieldNumber]
-        );
-
-        let userId = null;
-        let ownerPhone = process.env.PERSONAL_PHONE_NUMBER;
-        let userPasscode = DEFAULT_MASTER_PIN;
-        let isFamily = false;
-        let userStatus = 'trialing';
-        let trialEndsAt = new Date();
-
-        if (userResult.rows.length > 0) {
-            userId = userResult.rows[0].user_id;
-            ownerPhone = userResult.rows[0].owner_phone || process.env.PERSONAL_PHONE_NUMBER;
-            userPasscode = userResult.rows[0].passcode || DEFAULT_MASTER_PIN;
-            isFamily = userResult.rows[0].is_family || false;
-            userStatus = userResult.rows[0].subscription_status || 'trialing';
-            trialEndsAt = userResult.rows[0].trial_ends_at ? new Date(userResult.rows[0].trial_ends_at) : new Date();
-        }
-
-        // Access Gate: Allow if family, active subscription, or active 14-day trial
-        const hasAccess = isFamily || userStatus === 'active' || (userStatus === 'trialing' && trialEndsAt > new Date());
-
-        if (userId && !hasAccess) {
-            console.log(`[ACCESS DENIED] User ${userId} subscription/trial has expired.`);
-            twiml.say({ voice: 'alice' }, "This service is inactive due to an expired subscription. Please renew in the app. Goodbye.");
-            twiml.hangup();
-            res.type('text/xml');
-            return res.send(twiml.toString());
-        }
-
-        let isTrusted = false;
-
-        if (userId) {
-            const contactResult = await pool.query(
-                `SELECT is_guardian FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
-                [userId, callerNumber]
-            );
-            if (contactResult.rows.length > 0) {
-                isTrusted = true;
-                console.log(`[TRUSTED] Caller found in database for user ${userId}. Bypassing passcode.`);
-            }
-        }
-
-        if (isTrusted) {
-            twiml.say({ voice: 'alice' }, "Connecting your call.");
-            twiml.dial(ownerPhone);
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl, postman)
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
         } else {
-            console.log("[UNKNOWN CALLER] Prompting for security passcode.");
-
-            // OPTIONAL: If this unknown caller attempts a call, notify guardians via SMS
-            if (userId) {
-                const guardiansResult = await pool.query(
-                    'SELECT guardian_name, guardian_phone FROM public.user_guardians WHERE user_id = $1 AND guardian_phone IS NOT NULL',
-                    [userId]
-                );
-
-                if (guardiansResult.rows.length > 0) {
-                    const alertMessage = `Alert: Unrecognized call attempted from ${callerNumber}.`;
-                    for (const guardian of guardiansResult.rows) {
-                        await twilioClient.messages.create({
-                            body: alertMessage,
-                            from: process.env.TWILIO_PHONE_NUMBER,
-                            to: guardian.guardian_phone
-                        });
-                        console.log(`[GUARDIAN SMS SENT]: Sent to ${guardian.guardian_name} at ${guardian.guardian_phone}`);
-                    }
-                }
-            }
-
-            const gather = twiml.gather({
-                numDigits: 4,
-                action: `/verify-pin?ownerPhone=${encodeURIComponent(ownerPhone)}&expectedPasscode=${encodeURIComponent(userPasscode)}`,
-                method: 'POST',
-                timeout: 10
-            });
-            gather.say(
-                { voice: 'alice' },
-                "Please enter your four-digit security passcode on your phone keypad to reach this household."
-            );
-
-            twiml.say({ voice: 'alice' }, "No input received. Goodbye.");
-            twiml.hangup();
+            callback(null, true); // Set to true during initial beta testing
         }
-    } catch (err) {
-        console.error("[VOICE WEBHOOK ERROR]", err);
-        twiml.say({ voice: 'alice' }, "An error occurred processing your call. Goodbye.");
-        twiml.hangup();
-    }
+    },
+    credentials: true
+}));
 
-    res.type('text/xml');
-    res.send(twiml.toString());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Health Check Endpoint for UptimeRobot / Monitoring
+app.get('/health', (req, res) => {
+    res.status(200).send('Mobile Call Shield Backend is active and healthy.');
 });
 
-// 2. PIN / PASSCODE VERIFICATION ENDPOINT
-app.post('/verify-pin', (req, res) => {
-    const twiml = new twilio.twiml.VoiceResponse();
-    const enteredPin = req.body.Digits;
-    const ownerPhone = req.query.ownerPhone || process.env.PERSONAL_PHONE_NUMBER;
-    const expectedPasscode = req.query.expectedPasscode || DEFAULT_MASTER_PIN;
+// ----------------------------------------------------
+// 3. User Authentication Routes
+// ----------------------------------------------------
 
-    console.log(`[PIN VERIFY] Entered digits: ${enteredPin}`);
+// POST /api/auth/register (User Sign Up from Hostinger or Mobile App)
+app.post('/api/auth/register', async (req, res) => {
+    const { name, phoneNumber, email, password } = req.body;
 
-    if (enteredPin === expectedPasscode) {
-        twiml.say({ voice: 'alice' }, "Passcode accepted. Connecting your call now.");
-        twiml.dial(ownerPhone);
-    } else {
-        twiml.say({ voice: 'alice' }, "Incorrect passcode. Goodbye.");
-        twiml.hangup();
+    if (!phoneNumber || !password || !email) {
+        return res.status(400).json({ error: 'Phone number, email, and password are required.' });
     }
 
-    res.type('text/xml');
-    res.send(twiml.toString());
-});
-
-// 3. REGISTER ENDPOINT (Updated to use user_name and handle account recovery email)
-app.post('/api/register', async (req, res) => {
     try {
-        const { username, password, email, address, city, state, zip, country, privacyAgreed } = req.body;
+        // Check if user or recovery email already exists
+        const existingUser = await pool.query(
+            'SELECT * FROM users WHERE phone_number = $1 OR email = $2', 
+            [phoneNumber, email]
+        );
         
-        if (!privacyAgreed) {
-            return res.status(400).json({ success: false, error: "You must agree to the privacy policy to register." });
-        }
-        
-        const existingUser = await pool.query('SELECT id FROM public.users WHERE user_name = $1', [username]);
         if (existingUser.rows.length > 0) {
-            return res.status(400).json({ success: false, error: "Username is already in use." });
+            return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
-        
-        const insertQuery = `
-            INSERT INTO public.users (user_name, password, email, role, status, address, city, state, zip, country, privacy_agreed)
-            VALUES ($1, $2, $3, 'user', 'trialing', $4, $5, $6, $7, $8, $9)
-            RETURNING id, user_name, email, created_at;
-        `;
-        
-        const result = await pool.query(insertQuery, [
-            username, 
-            password, 
-            email || null,
-            address || null, 
-            city || null, 
-            state || null, 
-            zip || null, 
-            country || 'United States',
-            privacyAgreed
-        ]);
-        
-        const newUser = result.rows[0];
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Save user to PostgreSQL database
+        const newUser = await pool.query(
+            'INSERT INTO users (name, phone_number, email, password_hash, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, name, phone_number, email',
+            [name || 'User', phoneNumber, email, hashedPassword]
+        );
 
         res.status(201).json({
-            success: true,
-            userId: newUser.id,
-            username: newUser.user_name,
-            message: "User registered successfully!"
+            message: 'User registered successfully!',
+            user: newUser.rows[0]
         });
-        
     } catch (err) {
-        console.error("[REGISTER ERROR DETAIL]:", err.message);
-        res.status(500).json({ success: false, error: "DB Error: " + err.message });
+        console.error('Error during registration:', err);
+        res.status(500).json({ error: 'Server error creating user account.' });
     }
 });
 
-// 4. USER LOGIN ENDPOINT (Updated to query user_name)
+// POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
+    const { phoneNumber, password } = req.body;
+
     try {
-        const { username, password } = req.body;
-
-        const result = await pool.query(
-            'SELECT id, user_name, role FROM public.users WHERE user_name = $1 AND password = $2',
-            [username, password]
-        );
-
+        const result = await pool.query('SELECT * FROM users WHERE phone_number = $1', [phoneNumber]);
         if (result.rows.length === 0) {
-            return res.status(401).json({ success: false, error: "Invalid username or password." });
+            return res.status(401).json({ error: 'Invalid phone number or password.' });
         }
 
         const user = result.rows[0];
+        const match = await bcrypt.compare(password, user.password_hash);
+
+        if (!match) {
+            return res.status(401).json({ error: 'Invalid phone number or password.' });
+        }
 
         res.status(200).json({
-            success: true,
-            userId: user.id,
-            role: user.role || 'user',
+            message: 'Login successful!',
             user: {
                 id: user.id,
-                username: user.user_name
-            },
-            message: "Login successful!"
-        });
-
-    } catch (err) {
-        console.error("[LOGIN ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// 5. FORGOT PASSWORD ENDPOINT
-app.post('/api/forgot-password', async (req, res) => {
-    try {
-        const { email } = req.body;
-        const userQuery = await pool.query('SELECT * FROM public.users WHERE email = $1', [email]);
-        
-        if (userQuery.rows.length === 0) {
-            return res.status(404).json({ success: false, error: 'Email address not found in our system.' });
-        }
-
-        const user = userQuery.rows[0];
-        console.log(`[PASSWORD RESET] Password reset requested for user: ${user.user_name} at email: ${user.email}`);
-
-        // TODO: Integrate SendGrid or Nodemailer here to dispatch the actual reset link
-
-        res.status(200).json({ success: true, message: 'Password reset instructions sent to your email.' });
-    } catch (err) {
-        console.error("[FORGOT PASSWORD ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// 6. API ENDPOINT FOR CONTACTS SYNC (WITH UPSERT)
-app.post('/api/contacts', async (req, res) => {
-    try {
-        let userId = req.body.userId || req.body.user_id;
-        const name = req.body.name;
-        const phoneNumber = req.body.phoneNumber || req.body.phone_number;
-        const isGuardian = req.body.isGuardian !== undefined ? req.body.isGuardian : req.body.is_guardian;
-
-        userId = parseInt(userId, 10);
-        if (isNaN(userId) || userId <= 0) {
-            userId = 1;
-        }
-
-        const query = `
-            INSERT INTO public.trusted_contacts (user_id, name, phone_number, is_guardian)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, phone_number)
-            DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian
-            RETURNING *
-        `;
-        const values = [userId, name, phoneNumber, isGuardian ?? false];
-        
-        const result = await pool.query(query, values);
-        res.status(200).json({ success: true, contact: result.rows[0] });
-    } catch (err) {
-        console.error("[API CONTACT ERROR DETAIL]", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// 7. PHONE NUMBER ASSIGNMENT SIGN-IN/SYNC ENDPOINT
-app.post('/api/auth/signin', async (req, res) => {
-    const { deviceId, userPhoneNumber } = req.body;
-
-    try {
-        let queryResult = await pool.query(
-            'SELECT * FROM phone_numbers WHERE user_id = $1 AND is_active = true LIMIT 1',
-            [deviceId]
-        );
-
-        let assignedNumber = queryResult.rows[0];
-
-        if (!assignedNumber) {
-            const assignmentResult = await pool.query(`
-                UPDATE phone_numbers 
-                SET user_id = $1, is_active = true 
-                WHERE id = (
-                    SELECT id FROM phone_numbers 
-                    WHERE user_id IS NULL 
-                    LIMIT 1 
-                    FOR UPDATE
-                )
-                RETURNING *;
-            `, [deviceId]);
-
-            if (assignmentResult.rows.length === 0) {
-                return res.status(400).json({ error: "No available phone numbers in the pool. Please add more." });
+                name: user.name,
+                phoneNumber: user.phone_number,
+                email: user.email
             }
-
-            assignedNumber = assignmentResult.rows[0];
-        }
-
-        res.status(200).json({
-            success: true,
-            assignedPhoneNumber: assignedNumber.phone_number,
-            label: assignedNumber.label
         });
-
     } catch (err) {
-        console.error("Error during phone number assignment:", err);
-        res.status(500).json({ error: "Internal server error" });
+        console.error('Error during login:', err);
+        res.status(500).json({ error: 'Server error logging in.' });
     }
 });
 
-// 8. GET CONTACTS ENDPOINT
+// ----------------------------------------------------
+// 4. Contacts CRUD API (Used by iOS ContactSyncManager & Web)
+// ----------------------------------------------------
+
+// GET /api/contacts?userId=42
 app.get('/api/contacts', async (req, res) => {
-    try {
-        let userId = req.query.userId;
-        userId = parseInt(userId, 10);
-        if (isNaN(userId) || userId <= 0) {
-            userId = 1;
-        }
+    const userId = req.query.userId;
+    if (!userId) {
+        return res.status(400).json({ error: 'Missing userId parameter.' });
+    }
 
+    try {
         const result = await pool.query(
-            'SELECT id, user_id AS "userId", name, phone_number AS "phoneNumber", is_guardian AS "isGuardian" FROM public.trusted_contacts WHERE user_id = $1 ORDER BY id DESC',
+            'SELECT id, name, phone_number AS "phoneNumber", is_trusted AS "isTrusted" FROM contacts WHERE user_id = $1',
             [userId]
         );
-
-        res.status(200).json({ success: true, contacts: result.rows });
+        res.status(200).json(result.rows);
     } catch (err) {
-        console.error("[GET CONTACTS ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
+        console.error('Error fetching contacts:', err);
+        res.status(500).json({ error: 'Database query error.' });
     }
 });
 
-// 9. UPDATE USER PIN / PASSCODE ENDPOINT
-app.post('/api/users/pin', async (req, res) => {
-    try {
-        let userId = req.body.userId || req.body.user_id;
-        const newPin = req.body.pin || req.body.passcode;
+// POST /api/contacts (Add/Shield a new contact)
+app.post('/api/contacts', async (req, res) => {
+    const { userId, name, phoneNumber, isTrusted } = req.body;
 
-        userId = parseInt(userId, 10);
-        if (isNaN(userId) || userId <= 0) {
-            userId = 1;
-        }
-
-        if (!newPin || newPin.length !== 4 || isNaN(newPin)) {
-            return res.status(400).json({ success: false, error: "Passcode must be a 4-digit number." });
-        }
-
-        await pool.query(
-            'UPDATE public.users SET passcode = $1 WHERE id = $2',
-            [newPin, userId]
-        );
-
-        console.log(`[PASSCODE UPDATE] User ${userId} updated their security passcode.`);
-        res.status(200).json({ success: true, message: "Passcode updated successfully!" });
-    } catch (err) {
-        console.error("[PASSCODE UPDATE ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
+    if (!userId || !phoneNumber) {
+        return res.status(400).json({ error: 'userId and phoneNumber are required.' });
     }
-});
 
-// 10. CALL LOGS ENDPOINT
-app.get('/api/call-logs/:userId', async (req, res) => {
     try {
-        const { userId } = req.params;
         const result = await pool.query(
-            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-            [userId]
+            'INSERT INTO contacts (user_id, name, phone_number, is_trusted, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, name, phone_number AS "phoneNumber", is_trusted AS "isTrusted"',
+            [userId, name, phoneNumber, isTrusted ?? true]
         );
-        res.json({ success: true, logs: result.rows });
+        res.status(201).json(result.rows[0]);
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        console.error('Error saving contact:', err);
+        res.status(500).json({ error: 'Failed to save contact.' });
     }
 });
 
-// 11. UPDATE USER PHONE NUMBER ENDPOINT
-app.post('/api/users/phone-number', async (req, res) => {
+// ----------------------------------------------------
+// 5. Beta Tester Portal Error Logging Endpoint
+// ----------------------------------------------------
+app.post('/api/tester-feedback', async (req, res) => {
+    const { testerName, device, errorDetails } = req.body;
+
     try {
-        let userId = req.body.userId || req.body.user_id;
-        const newPhoneNumber = req.body.newPhoneNumber || req.body.new_phone_number;
+        console.log(`\n--- [BETA TESTER FEEDBACK] ---`);
+        console.log(`Tester: ${testerName} | Device: ${device}`);
+        console.log(`Details: ${errorDetails}\n`);
 
-        userId = parseInt(userId, 10);
-        if (isNaN(userId) || userId <= 0) {
-            return res.status(400).json({ success: false, error: "Invalid user ID." });
-        }
-
-        if (!newPhoneNumber) {
-            return res.status(400).json({ success: false, error: "New phone number is required." });
-        }
-
+        // Save to PostgreSQL if table exists
         await pool.query(
-            'UPDATE public.users SET owner_phone = $1 WHERE id = $2',
-            [newPhoneNumber, userId]
-        );
+            'INSERT INTO tester_feedback (tester_name, device, details, created_at) VALUES ($1, $2, $3, NOW())',
+            [testerName, device, errorDetails]
+        ).catch(err => console.log('Notice: tester_feedback table optional:', err.message));
 
-        console.log(`[PHONE UPDATE] User ${userId} updated their personal phone number to ${newPhoneNumber}.`);
-        res.status(200).json({ success: true, message: "Phone number updated successfully!" });
-
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Feedback Received</title>
+                <script src="https://cdn.tailwindcss.com"></script>
+            </head>
+            <body class="bg-slate-50 flex items-center justify-center h-screen font-sans">
+                <div class="bg-white p-8 rounded-2xl shadow-lg text-center max-w-md border border-slate-200">
+                    <div class="text-emerald-500 text-5xl mb-4">✓</div>
+                    <h2 class="text-2xl font-bold text-slate-800 mb-2">Thank You, ${testerName}!</h2>
+                    <p class="text-slate-600 mb-6">Your report for <strong>${device}</strong> has been logged successfully.</p>
+                    <a href="/" class="bg-emerald-500 text-white font-bold px-6 py-3 rounded-lg hover:bg-emerald-600 transition-all inline-block">Return to Homepage</a>
+                </div>
+            </body>
+            </html>
+        `);
     } catch (err) {
-        console.error("[PHONE UPDATE ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
+        console.error('Error logging feedback:', err);
+        res.status(500).send('Error logging feedback report.');
     }
 });
 
-// 12. GET APP SETTINGS ENDPOINT
-app.get('/api/settings', async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM public.app_settings LIMIT 1');
-        
-        res.status(200).json({ 
-            success: true, 
-            settings: result.rows[0] || {} 
-        });
-    } catch (err) {
-        console.error("[SETTINGS ERROR]", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
+// ----------------------------------------------------
+// 6. Twilio Voice Webhook (Incoming Call Screening)
+// ----------------------------------------------------
+app.post('/voice', (req, res) => {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    <Response>
+        <Say voice="alice">Hello. This number is protected by Mobile Call Shield. Please speak your name or passphrase after the tone to connect your call.</Say>
+        <Record maxLength="10" action="/process-passphrase" />
+    </Response>`;
+    
+    res.type('text/xml');
+    res.send(twiml);
 });
 
-// 13. SYNC SUBSCRIPTION STATUS FROM APP STOREKIT 2
-app.post('/api/subscription/sync', async (req, res) => {
-    try {
-        const { userId, originalTransactionId, expirationDate, isTrial } = req.body;
-        
-        const expDate = new Date(expirationDate * 1000);
-        const status = expDate > new Date() ? (isTrial ? 'trialing' : 'active') : 'expired';
-
-        await pool.query(
-            `UPDATE public.users 
-             SET subscription_status = $1, 
-                 original_transaction_id = $2, 
-                 trial_ends_at = $3 
-             WHERE id = $4`,
-            [status, originalTransactionId, expDate, userId]
-        );
-
-        console.log(`[SUBSCRIPTION SYNC] User ${userId} status updated to: ${status}`);
-        res.json({ success: true, status });
-    } catch (err) {
-        console.error('[SUBSCRIPTION SYNC ERROR]', err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-const PORT = process.env.PORT || 3000;
+// ----------------------------------------------------
+// 7. Start Express Server
+// ----------------------------------------------------
 app.listen(PORT, () => {
-    console.log(`[SERVER] Senior Scam Shield backend running on port ${PORT}`);
+    console.log(`Mobile Call Shield Server running on port ${PORT}`);
 });
