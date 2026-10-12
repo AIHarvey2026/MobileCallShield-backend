@@ -7,6 +7,7 @@ const twilio = require('twilio');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+
 // ----------------------------------------------------
 // 1. Database Connection (PostgreSQL on Render)
 // ----------------------------------------------------
@@ -14,6 +15,33 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
+
+
+
+// 2. Middleware Configuration
+app.use(express.json());
+
+// ----------------------------------------------------
+// ALL API ROUTES GO HERE IN THE MIDDLE:
+// ----------------------------------------------------
+
+// Example: Get settings route
+app.get('/api/settings', async (req, res) => { ... });
+
+// Example: Guardian management routes (GET, POST, DELETE)
+app.get('/api/guardians/:userId', async (req, res) => { ... });
+app.post('/api/guardians', async (req, res) => { ... });
+app.delete('/api/guardians/:id', async (req, res) => { ... });
+
+// ----------------------------------------------------
+
+// 3. Start Express Server (This must always be at the very bottom)
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
+
+
+
 
 // ----------------------------------------------------
 // 2. Middleware Configuration
