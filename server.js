@@ -88,28 +88,37 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-// POST /api/auth/login
+// Login
+
 app.post('/api/auth/login', async (req, res) => {
-    // Expecting user_name (or email/phone) and password from the frontend request
     const { username, password } = req.body;
 
-    console.log(`[Login Attempt] Checking user_name/email: "${username}"`);
+    console.log(`[Login Attempt] Username/Email received: "${username}" | Password received: "${password}"`);
 
     try {
-        // Query matching your schema columns: user_name (or email) and password
+        // Step 1: Just look up the user by email/username first (ignoring password)
         const result = await pool.query(
-            'SELECT * FROM users WHERE (user_name = $1 OR email = $1) AND password = $2', 
-            [username, password]
+            'SELECT * FROM users WHERE user_name = $1 OR email = $1', 
+            [username]
         );
 
         if (result.rows.length === 0) {
-            console.log(`[Login Error] No match found for user: "${username}" with that password.`);
-            return res.status(401).json({ error: 'Invalid credentials.' });
+            console.log(`[Login Error] User not found in database for: "${username}"`);
+            return res.status(401).json({ error: 'Invalid credentials: User not found.' });
         }
 
         const user = result.rows[0];
-        console.log(`[Login Success] User ID ${user.id} logged in.`);
+        console.log(`[Login Debug] User found! DB Password is: "${user.password}"`);
 
+        // Step 2: Compare passwords (supporting plain text or bcrypt)
+        const match = (password === user.password) || await bcrypt.compare(password, user.password).catch(() => false);
+
+        if (!match) {
+            console.log(`[Login Error] Password mismatch! Sent: "${password}" vs DB: "${user.password}"`);
+            return res.status(401).json({ error: 'Invalid credentials: Password incorrect.' });
+        }
+
+        console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
         res.status(200).json({
             success: true,
             message: 'Login successful!',
