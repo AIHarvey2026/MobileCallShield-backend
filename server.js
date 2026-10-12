@@ -159,7 +159,7 @@ app.post('/api/tester-feedback', async (req, res) => {
 // 5. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
 
-// Initial Call Greeting & Speech Gathering
+// Initial Call Greeting & Speech Gathering Endpoint
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     console.log(`[Twilio Call] Incoming call to Twilio number: ${twilioNumber}`);
@@ -183,7 +183,7 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Passphrase Processing & Dynamic Forwarding Endpoint (Using `passcode` column)
+// Passphrase Processing & Dynamic Forwarding Endpoint
 app.post('/process-passphrase', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const spokenPassphrase = (req.body.SpeechResult || '').toLowerCase().trim();
@@ -191,8 +191,8 @@ app.post('/process-passphrase', async (req, res) => {
     console.log(`[Twilio Call] Caller said: "${spokenPassphrase}"`);
 
     try {
-        // Query the database for the user's phone number and passcode[cite: 2]
-        const userResult = await pool.query('SELECT phone_number, passcode FROM users ORDER BY id ASC LIMIT 1');
+        // Query using the correct columns: owner_phone and passcode
+        const userResult = await pool.query('SELECT owner_phone, passcode FROM users ORDER BY id ASC LIMIT 1');
         
         if (userResult.rows.length === 0) {
             twiml.say({ voice: 'alice' }, 'No user account found to route this call.');
@@ -202,10 +202,10 @@ app.post('/process-passphrase', async (req, res) => {
         }
 
         const user = userResult.rows[0];
-        const forwardNumber = user.phone_number;
-        const userPasscode = (user.passcode || '1234').toLowerCase().trim(); // Fallback to 1234 if empty
+        const forwardNumber = user.owner_phone;
+        const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
-        // Verify if what the caller spoke matches the user's custom passcode[cite: 2]
+        // Verify if what the caller spoke matches the user's custom passcode
         if (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode)) {
             twiml.say({ voice: 'alice' }, 'Passcode accepted. Connecting your call now.');
             twiml.dial(forwardNumber);
