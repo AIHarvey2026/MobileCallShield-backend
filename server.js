@@ -90,27 +90,25 @@ app.post('/api/auth/register', async (req, res) => {
 
 // POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
-    const { phoneNumber, password } = req.body;
+    // Expecting user_name (or email/phone) and password from the frontend request
+    const { username, password } = req.body;
+
+    console.log(`[Login Attempt] Checking user_name/email: "${username}"`);
 
     try {
-        // Query using owner_phone or user_name (email)
+        // Query matching your schema columns: user_name (or email) and password
         const result = await pool.query(
-            'SELECT * FROM users WHERE owner_phone = $1 OR user_name = $1 OR email = $1', 
-            [phoneNumber]
+            'SELECT * FROM users WHERE (user_name = $1 OR email = $1) AND password = $2', 
+            [username, password]
         );
 
         if (result.rows.length === 0) {
+            console.log(`[Login Error] No match found for user: "${username}" with that password.`);
             return res.status(401).json({ error: 'Invalid credentials.' });
         }
 
         const user = result.rows[0];
-        
-        // Supports both bcrypt hashes and legacy plain text passwords in development
-        const match = await bcrypt.compare(password, user.password).catch(() => false) || (password === user.password);
-
-        if (!match) {
-            return res.status(401).json({ error: 'Invalid credentials.' });
-        }
+        console.log(`[Login Success] User ID ${user.id} logged in.`);
 
         res.status(200).json({
             success: true,
