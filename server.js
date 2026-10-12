@@ -49,7 +49,7 @@ app.get('/health', (req, res) => {
 
 // POST /api/auth/register (User Sign Up from Hostinger or Mobile App)
 app.post('/api/auth/register', async (req, res) => {
-    const { name, phoneNumber, email, password, carrier } = req.body;
+    const { name, phoneNumber, email, password } = req.body;
 
     if (!phoneNumber || !password || !email) {
         return res.status(400).json({ error: 'Phone number, email, and password are required.' });
@@ -57,7 +57,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     try {
         const existingUser = await pool.query(
-            'SELECT * FROM users WHERE phone_number = $1 OR email = $2', 
+            'SELECT * FROM users WHERE owner_phone = $1 OR email = $2 OR user_name = $2', 
             [phoneNumber, email]
         );
         
@@ -68,14 +68,19 @@ app.post('/api/auth/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newUser = await pool.query(
-            'INSERT INTO users (name, phone_number, email, password_hash, carrier, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, name, phone_number, email',
-            [name || 'User', phoneNumber, email, hashedPassword, carrier || 'AT&T']
+            'INSERT INTO users (user_name, owner_phone, email, password, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, user_name, owner_phone, email',
+            [email, phoneNumber, email, hashedPassword]
         );
 
         res.status(201).json({
             success: true,
             message: 'User registered successfully!',
-            user: newUser.rows[0]
+            user: {
+                id: newUser.rows[0].id,
+                name: newUser.rows[0].user_name,
+                phoneNumber: newUser.rows[0].owner_phone,
+                email: newUser.rows[0].email
+            }
         });
     } catch (err) {
         console.error('Error during registration:', err);
@@ -88,16 +93,23 @@ app.post('/api/auth/login', async (req, res) => {
     const { phoneNumber, password } = req.body;
 
     try {
-        const result = await pool.query('SELECT * FROM users WHERE phone_number = $1', [phoneNumber]);
+        // Query using owner_phone or user_name (email)
+        const result = await pool.query(
+            'SELECT * FROM users WHERE owner_phone = $1 OR user_name = $1 OR email = $1', 
+            [phoneNumber]
+        );
+
         if (result.rows.length === 0) {
-            return res.status(401).json({ error: 'Invalid phone number or password.' });
+            return res.status(401).json({ error: 'Invalid credentials.' });
         }
 
         const user = result.rows[0];
-        const match = await bcrypt.compare(password, user.password_hash);
+        
+        // Supports both bcrypt hashes and legacy plain text passwords in development
+        const match = await bcrypt.compare(password, user.password).catch(() => false) || (password === user.password);
 
         if (!match) {
-            return res.status(401).json({ error: 'Invalid phone number or password.' });
+            return res.status(401).json({ error: 'Invalid credentials.' });
         }
 
         res.status(200).json({
@@ -105,8 +117,8 @@ app.post('/api/auth/login', async (req, res) => {
             message: 'Login successful!',
             user: {
                 id: user.id,
-                name: user.name,
-                phoneNumber: user.phone_number,
+                name: user.user_name,
+                phoneNumber: user.owner_phone,
                 email: user.email
             }
         });
@@ -159,7 +171,6 @@ app.post('/api/tester-feedback', async (req, res) => {
 // 5. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
 
-// Initial Call Greeting & Speech Gathering Endpoint
 // Initial Call Greeting & Speech Gathering Endpoint (with Toggle Check)
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
