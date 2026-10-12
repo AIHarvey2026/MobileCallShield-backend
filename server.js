@@ -44,6 +44,25 @@ app.get('/health', (req, res) => {
 });
 
 // ----------------------------------------------------
+// App Settings Endpoint (Logo and Title Sync)
+// ----------------------------------------------------
+app.get('/api/settings', async (req, res) => {
+    try {
+        // You can fetch these from database or return defaults
+        res.json({
+            success: true,
+            settings: {
+                app_name: "Mobile Call Shield",
+                logo_url: "" // Optional URL to a hosted logo image
+            }
+        });
+    } catch (err) {
+        console.error('Error fetching settings:', err);
+        res.status(500).json({ error: 'Server error fetching settings.' });
+    }
+});
+
+// ----------------------------------------------------
 // 3. User Authentication Routes
 // ----------------------------------------------------
 
