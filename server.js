@@ -394,6 +394,32 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// Toggle Guardian Mode Route
+// ----------------------------------------------------
+app.put('/api/user/toggle-guardian-mode', async (req, res) => {
+    const { userId, isGuardianEnabled } = req.body;
+
+    if (userId === undefined || isGuardianEnabled === undefined) {
+        return res.status(400).json({ error: 'userId and isGuardianEnabled status are required.' });
+    }
+
+    try {
+        await pool.query(
+            'UPDATE users SET is_guardian_mode_enabled = $1 WHERE id = $2',
+            [isGuardianEnabled, userId]
+        );
+
+        res.json({
+            success: true,
+            message: `Guardian Mode updated to ${isGuardianEnabled}.`
+        });
+    } catch (err) {
+        console.error('Error updating guardian mode toggle:', err);
+        res.status(500).json({ error: 'Server error updating guardian mode status.' });
+    }
+});
+
+// ----------------------------------------------------
 // 7. Start Express Server
 // ----------------------------------------------------
 app.listen(PORT, () => {
