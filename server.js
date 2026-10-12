@@ -183,19 +183,25 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Passphrase Processing & Dynamic Forwarding Endpoint
+// Passphrase Processing & Dynamic Forwarding Endpoint (Joined with phone_numbers)
 app.post('/process-passphrase', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const spokenPassphrase = (req.body.SpeechResult || '').toLowerCase().trim();
+    const twilioNumber = req.body.To; // The Twilio phone number that was called
 
-    console.log(`[Twilio Call] Caller said: "${spokenPassphrase}"`);
+    console.log(`[Twilio Call] Incoming call to ${twilioNumber} | Caller said: "${spokenPassphrase}"`);
 
     try {
-        // Query using the correct columns: owner_phone and passcode
-        const userResult = await pool.query('SELECT owner_phone, passcode FROM users ORDER BY id ASC LIMIT 1');
+        // Query joining phone_numbers and users tables using the dialed Twilio number
+        const userResult = await pool.query(`
+            SELECT u.passcode, u.owner_phone 
+            FROM phone_numbers pn
+            JOIN users u ON pn.user_id = u.id
+            WHERE pn.phone_number = $1 AND pn.is_active = true
+        `, [twilioNumber]);
         
         if (userResult.rows.length === 0) {
-            twiml.say({ voice: 'alice' }, 'No user account found to route this call.');
+            twiml.say({ voice: 'alice' }, 'No active account found for this phone number.');
             twiml.hangup();
             res.type('text/xml');
             return res.send(twiml.toString());
