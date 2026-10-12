@@ -7,7 +7,6 @@ const twilio = require('twilio');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-
 // ----------------------------------------------------
 // 1. Database Connection (PostgreSQL on Render)
 // ----------------------------------------------------
@@ -15,33 +14,6 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
-
-
-
-// 2. Middleware Configuration
-app.use(express.json());
-
-// ----------------------------------------------------
-// ALL API ROUTES GO HERE IN THE MIDDLE:
-// ----------------------------------------------------
-
-// Example: Get settings route
-app.get('/api/settings', async (req, res) => { ... });
-
-// Example: Guardian management routes (GET, POST, DELETE)
-app.get('/api/guardians/:userId', async (req, res) => { ... });
-app.post('/api/guardians', async (req, res) => { ... });
-app.delete('/api/guardians/:id', async (req, res) => { ... });
-
-// ----------------------------------------------------
-
-// 3. Start Express Server (This must always be at the very bottom)
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
-
-
-
 
 // ----------------------------------------------------
 // 2. Middleware Configuration
@@ -76,12 +48,11 @@ app.get('/health', (req, res) => {
 // ----------------------------------------------------
 app.get('/api/settings', async (req, res) => {
     try {
-        // You can fetch these from database or return defaults
         res.json({
             success: true,
             settings: {
                 app_name: "Mobile Call Shield",
-                logo_url: "" // Optional URL to a hosted logo image
+                logo_url: ""
             }
         });
     } catch (err) {
@@ -94,7 +65,7 @@ app.get('/api/settings', async (req, res) => {
 // 3. User Authentication Routes
 // ----------------------------------------------------
 
-// POST /api/auth/register (User Sign Up from Hostinger or Mobile App)
+// POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
     const { name, phoneNumber, email, password } = req.body;
 
@@ -136,14 +107,12 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // Login
-
 app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
 
     console.log(`[Login Attempt] Username/Email received: "${username}" | Password received: "${password}"`);
 
     try {
-        // Step 1: Just look up the user by email/username first (ignoring password)
         const result = await pool.query(
             'SELECT * FROM users WHERE user_name = $1 OR email = $1', 
             [username]
@@ -157,7 +126,6 @@ app.post('/api/auth/login', async (req, res) => {
         const user = result.rows[0];
         console.log(`[Login Debug] User found! DB Password is: "${user.password}"`);
 
-        // Step 2: Compare passwords (supporting plain text or bcrypt)
         const match = (password === user.password) || await bcrypt.compare(password, user.password).catch(() => false);
 
         if (!match) {
@@ -224,8 +192,6 @@ app.post('/api/tester-feedback', async (req, res) => {
 // ----------------------------------------------------
 // 5. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
-
-// Initial Call Greeting & Speech Gathering Endpoint (with Toggle Check)
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     console.log(`[Twilio Call] Incoming call to Twilio number: ${twilioNumber}`);
@@ -233,7 +199,6 @@ app.post('/voice', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
 
     try {
-        // Check if the user has call shield enabled in the database
         const userResult = await pool.query(`
             SELECT u.owner_phone, u.is_call_shield_enabled 
             FROM phone_numbers pn
@@ -244,7 +209,6 @@ app.post('/voice', async (req, res) => {
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
             
-            // If protection is disabled by the user, bypass screening and dial directly
             if (user.is_call_shield_enabled === false) {
                 console.log(`[Call Shield Disabled] Direct dialing owner phone: ${user.owner_phone}`);
                 twiml.dial(user.owner_phone);
@@ -256,7 +220,6 @@ app.post('/voice', async (req, res) => {
         console.error('Error checking shield status on incoming call:', err);
     }
 
-    // Default behavior: Run the speech screening prompt if enabled
     const gather = twiml.gather({
         input: 'speech',
         action: '/process-passphrase',
@@ -279,7 +242,6 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Passphrase Processing & Dynamic Forwarding Endpoint (with Voicemail fallback)
 app.post('/process-passphrase', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const spokenPassphrase = (req.body.SpeechResult || '').toLowerCase().trim();
@@ -306,12 +268,10 @@ app.post('/process-passphrase', async (req, res) => {
         const forwardNumber = user.owner_phone;
         const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
-        // 1. If passcode matches -> Connect call directly
         if (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode)) {
             twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Passcode accepted. Connecting your call now.');
             twiml.dial(forwardNumber);
         } else {
-            // 2. If passcode fails -> Allow doctors, pharmacies, and family to leave a voicemail
             twiml.say({ 
                 voice: 'Polly.Matthew-Neural' 
             }, 'Passcode not recognized. If you are a doctor, pharmacy, or family member, please leave a message after the tone with your name and callback number. Press pound when finished.');
@@ -333,7 +293,6 @@ app.post('/process-passphrase', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Voicemail Handler Endpoint
 app.post('/save-voicemail', (req, res) => {
     const recordingUrl = req.body.RecordingUrl;
     const callerNumber = req.body.From;
@@ -354,7 +313,6 @@ app.post('/save-voicemail', (req, res) => {
 // 6. Guardian Management Routes
 // ----------------------------------------------------
 
-// GET /api/guardians/:userId - Fetch all guardians for a user
 app.get('/api/guardians/:userId', async (req, res) => {
     const userId = req.params.userId;
     try {
@@ -369,7 +327,6 @@ app.get('/api/guardians/:userId', async (req, res) => {
     }
 });
 
-// POST /api/guardians - Add a new guardian
 app.post('/api/guardians', async (req, res) => {
     const { userId, guardian_name, guardian_phone } = req.body;
 
@@ -394,7 +351,6 @@ app.post('/api/guardians', async (req, res) => {
     }
 });
 
-// DELETE /api/guardians/:id - Remove a guardian
 app.delete('/api/guardians/:id', async (req, res) => {
     const guardianId = req.params.id;
     try {
@@ -406,9 +362,7 @@ app.delete('/api/guardians/:id', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
 // Passcode Management Route
-// ----------------------------------------------------
 app.put('/api/user/passcode', async (req, res) => {
     const { userId, passcode } = req.body;
 
@@ -432,9 +386,7 @@ app.put('/api/user/passcode', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
 // Toggle Call Shield Status Route
-// ----------------------------------------------------
 app.put('/api/user/toggle-shield', async (req, res) => {
     const { userId, isEnabled } = req.body;
 
@@ -458,9 +410,7 @@ app.put('/api/user/toggle-shield', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
 // Toggle Guardian Mode Route
-// ----------------------------------------------------
 app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     const { userId, isGuardianEnabled } = req.body;
 
