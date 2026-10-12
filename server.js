@@ -117,48 +117,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 4. Contacts CRUD API (Used by iOS ContactSyncManager & Web)
-// ----------------------------------------------------
-
-app.get('/api/contacts', async (req, res) => {
-    const userId = req.query.userId;
-    if (!userId) {
-        return res.status(400).json({ error: 'Missing userId parameter.' });
-    }
-
-    try {
-        const result = await pool.query(
-            'SELECT id, name, phone_number AS "phoneNumber", is_trusted AS "isTrusted" FROM contacts WHERE user_id = $1',
-            [userId]
-        );
-        res.status(200).json(result.rows);
-    } catch (err) {
-        console.error('Error fetching contacts:', err);
-        res.status(500).json({ error: 'Database query error.' });
-    }
-});
-
-app.post('/api/contacts', async (req, res) => {
-    const { userId, name, phoneNumber, isTrusted } = req.body;
-
-    if (!userId || !phoneNumber) {
-        return res.status(400).json({ error: 'userId and phoneNumber are required.' });
-    }
-
-    try {
-        const result = await pool.query(
-            'INSERT INTO contacts (user_id, name, phone_number, is_trusted, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, name, phone_number AS "phoneNumber", is_trusted AS "isTrusted"',
-            [userId, name, phoneNumber, isTrusted ?? true]
-        );
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error('Error saving contact:', err);
-        res.status(500).json({ error: 'Failed to save contact.' });
-    }
-});
-
-// ----------------------------------------------------
-// 5. Beta Tester Portal Error Logging Endpoint
+// 4. Beta Tester Portal Error Logging Endpoint
 // ----------------------------------------------------
 app.post('/api/tester-feedback', async (req, res) => {
     const { testerName, device, errorDetails } = req.body;
@@ -197,11 +156,14 @@ app.post('/api/tester-feedback', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 6. Twilio Voice Webhooks (Incoming Call Screening)
+// 5. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
 
 // Initial Call Greeting & Speech Gathering
-app.post('/voice', (req, res) => {
+app.post('/voice', async (req, res) => {
+    const twilioNumber = req.body.To;
+    console.log(`[Twilio Call] Incoming call to Twilio number: ${twilioNumber}`);
+
     const twiml = new twilio.twiml.VoiceResponse();
 
     const gather = twiml.gather({
@@ -212,7 +174,7 @@ app.post('/voice', (req, res) => {
         speechTimeout: 'auto'
     });
 
-    gather.say({ voice: 'alice' }, 'Hello. This number is protected by Mobile Call Shield. Please state your name or passphrase after the tone.');
+    gather.say({ voice: 'alice' }, 'Hello. This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
 
     twiml.say({ voice: 'alice' }, 'We did not receive any response. Goodbye.');
     twiml.hangup();
@@ -221,18 +183,39 @@ app.post('/voice', (req, res) => {
     res.send(twiml.toString());
 });
 
-// Passphrase Processing Endpoint
-app.post('/process-passphrase', (req, res) => {
+// Passphrase Processing & Dynamic Forwarding Endpoint (Using `passcode` column)
+app.post('/process-passphrase', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
-    const spokenPassphrase = req.body.SpeechResult || '';
+    const spokenPassphrase = (req.body.SpeechResult || '').toLowerCase().trim();
 
     console.log(`[Twilio Call] Caller said: "${spokenPassphrase}"`);
 
-    if (spokenPassphrase.trim().length > 0) {
-        twiml.say({ voice: 'alice' }, 'Passphrase accepted. Connecting your call now.');
-        twiml.dial('+1YOURPHONE_NUMBER_HERE'); // Replace with your actual forwarding phone number
-    } else {
-        twiml.say({ voice: 'alice' }, 'Passphrase not recognized. Access denied.');
+    try {
+        // Query the database for the user's phone number and passcode[cite: 2]
+        const userResult = await pool.query('SELECT phone_number, passcode FROM users ORDER BY id ASC LIMIT 1');
+        
+        if (userResult.rows.length === 0) {
+            twiml.say({ voice: 'alice' }, 'No user account found to route this call.');
+            twiml.hangup();
+            res.type('text/xml');
+            return res.send(twiml.toString());
+        }
+
+        const user = userResult.rows[0];
+        const forwardNumber = user.phone_number;
+        const userPasscode = (user.passcode || '1234').toLowerCase().trim(); // Fallback to 1234 if empty
+
+        // Verify if what the caller spoke matches the user's custom passcode[cite: 2]
+        if (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode)) {
+            twiml.say({ voice: 'alice' }, 'Passcode accepted. Connecting your call now.');
+            twiml.dial(forwardNumber);
+        } else {
+            twiml.say({ voice: 'alice' }, 'Passcode not recognized. Access denied.');
+            twiml.hangup();
+        }
+    } catch (err) {
+        console.error('Database lookup error during passcode verification:', err);
+        twiml.say({ voice: 'alice' }, 'An internal error occurred processing your call.');
         twiml.hangup();
     }
 
@@ -241,7 +224,7 @@ app.post('/process-passphrase', (req, res) => {
 });
 
 // ----------------------------------------------------
-// 7. Start Express Server
+// 6. Start Express Server
 // ----------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Mobile Call Shield Server running on port ${PORT}`);
