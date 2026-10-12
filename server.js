@@ -313,48 +313,44 @@ app.post('/save-voicemail', (req, res) => {
 // 6. Guardian Management Routes
 // ----------------------------------------------------
 
+// Fetch trusted contacts / guardians
 app.get('/api/guardians/:userId', async (req, res) => {
-    const userId = req.params.userId;
     try {
-        const result = await pool.query(
-            'SELECT id, guardian_name, guardian_phone FROM guardians WHERE user_id = $1 ORDER BY id DESC',
-            [userId]
-        );
-        res.json(result.rows);
+        const { userId } = req.params;
+        const result = await pool.query('SELECT * FROM trusted_contacts WHERE user_id = $1', [userId]);
+        // Map columns if needed to match your iOS model (guardian_name / guardian_phone)
+        const formatted = result.rows.map(row => ({
+            id: row.id,
+            guardian_name: row.name, // Adjust 'name' if your column is named differently
+            guardian_phone: row.phone // Adjust 'phone' if your column is named differently
+        }));
+        res.json(formatted);
     } catch (err) {
         console.error('Error fetching guardians:', err);
-        res.status(500).json({ error: 'Server error fetching guardians.' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
+// Add trusted contact / guardian
 app.post('/api/guardians', async (req, res) => {
-    const { userId, guardian_name, guardian_phone } = req.body;
-
-    if (!userId || !guardian_name || !guardian_phone) {
-        return res.status(400).json({ error: 'userId, guardian name, and phone are required.' });
-    }
-
     try {
-        const newGuardian = await pool.query(
-            'INSERT INTO guardians (user_id, guardian_name, guardian_phone, created_at) VALUES ($1, $2, $3, NOW()) RETURNING id, guardian_name, guardian_phone',
+        const { userId, guardian_name, guardian_phone } = req.body;
+        const result = await pool.query(
+            'INSERT INTO trusted_contacts (user_id, name, phone) VALUES ($1, $2, $3) RETURNING *',
             [userId, guardian_name, guardian_phone]
         );
-
-        res.status(201).json({
-            success: true,
-            message: 'Guardian added successfully!',
-            guardian: newGuardian.rows[0]
-        });
+        res.json(result.rows[0]);
     } catch (err) {
         console.error('Error adding guardian:', err);
-        res.status(500).json({ error: 'Server error adding guardian.' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
+
 
 app.delete('/api/guardians/:id', async (req, res) => {
     const guardianId = req.params.id;
     try {
-        await pool.query('DELETE FROM guardians WHERE id = $1', [guardianId]);
+        await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [guardianId]);
         res.json({ success: true, message: 'Guardian deleted successfully.' });
     } catch (err) {
         console.error('Error deleting guardian:', err);
