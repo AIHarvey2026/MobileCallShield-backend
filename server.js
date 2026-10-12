@@ -49,7 +49,7 @@ app.get('/health', (req, res) => {
 
 // POST /api/auth/register (User Sign Up from Hostinger or Mobile App)
 app.post('/api/auth/register', async (req, res) => {
-    const { name, phoneNumber, email, password } = req.body;
+    const { name, phoneNumber, email, password, carrier } = req.body;
 
     if (!phoneNumber || !password || !email) {
         return res.status(400).json({ error: 'Phone number, email, and password are required.' });
@@ -68,8 +68,8 @@ app.post('/api/auth/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newUser = await pool.query(
-            'INSERT INTO users (name, phone_number, email, password_hash, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, name, phone_number, email',
-            [name || 'User', phoneNumber, email, hashedPassword]
+            'INSERT INTO users (name, phone_number, email, password_hash, carrier, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, name, phone_number, email',
+            [name || 'User', phoneNumber, email, hashedPassword, carrier || 'AT&T']
         );
 
         res.status(201).json({
@@ -159,7 +159,7 @@ app.post('/api/tester-feedback', async (req, res) => {
 // 5. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
 
-// Initial Call Greeting & Speech Gathering Endpoint
+// Initial Call Greeting & Speech Gathering Endpoint with Neural Voice
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     console.log(`[Twilio Call] Incoming call to Twilio number: ${twilioNumber}`);
@@ -174,25 +174,30 @@ app.post('/voice', async (req, res) => {
         speechTimeout: 'auto'
     });
 
-    gather.say({ voice: 'alice' }, 'Hello. This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
+    // Using Amazon Polly's high-quality neural voice for a natural, non-robotic sound
+    gather.say({ 
+        voice: 'Polly.Matthew-Neural' 
+    }, 'Hello! This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
 
-    twiml.say({ voice: 'alice' }, 'We did not receive any response. Goodbye.');
+    twiml.say({ 
+        voice: 'Polly.Matthew-Neural' 
+    }, 'We did not receive any response. Goodbye.');
+    
     twiml.hangup();
 
     res.type('text/xml');
     res.send(twiml.toString());
 });
 
-// Passphrase Processing & Dynamic Forwarding Endpoint (Joined with phone_numbers)
+// Passphrase Processing & Dynamic Forwarding Endpoint
 app.post('/process-passphrase', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const spokenPassphrase = (req.body.SpeechResult || '').toLowerCase().trim();
-    const twilioNumber = req.body.To; // The Twilio phone number that was called
+    const twilioNumber = req.body.To;
 
     console.log(`[Twilio Call] Incoming call to ${twilioNumber} | Caller said: "${spokenPassphrase}"`);
 
     try {
-        // Query joining phone_numbers and users tables using the dialed Twilio number
         const userResult = await pool.query(`
             SELECT u.passcode, u.owner_phone 
             FROM phone_numbers pn
@@ -201,7 +206,7 @@ app.post('/process-passphrase', async (req, res) => {
         `, [twilioNumber]);
         
         if (userResult.rows.length === 0) {
-            twiml.say({ voice: 'alice' }, 'No active account found for this phone number.');
+            twiml.say({ voice: 'Polly.Matthew-Neural' }, 'No active account found for this phone number.');
             twiml.hangup();
             res.type('text/xml');
             return res.send(twiml.toString());
@@ -211,17 +216,16 @@ app.post('/process-passphrase', async (req, res) => {
         const forwardNumber = user.owner_phone;
         const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
-        // Verify if what the caller spoke matches the user's custom passcode
         if (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode)) {
-            twiml.say({ voice: 'alice' }, 'Passcode accepted. Connecting your call now.');
+            twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Passcode accepted. Connecting your call now.');
             twiml.dial(forwardNumber);
         } else {
-            twiml.say({ voice: 'alice' }, 'Passcode not recognized. Access denied.');
+            twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Passcode not recognized. Access denied.');
             twiml.hangup();
         }
     } catch (err) {
         console.error('Database lookup error during passcode verification:', err);
-        twiml.say({ voice: 'alice' }, 'An internal error occurred processing your call.');
+        twiml.say({ voice: 'Polly.Matthew-Neural' }, 'An internal error occurred processing your call.');
         twiml.hangup();
     }
 
