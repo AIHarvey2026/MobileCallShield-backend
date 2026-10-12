@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
+const twilio = require('twilio');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,7 +18,6 @@ const pool = new Pool({
 // ----------------------------------------------------
 // 2. Middleware Configuration
 // ----------------------------------------------------
-// Allow requests from your Hostinger domain (and local testing)
 const allowedOrigins = [
     'https://mobilecallshield.com',
     'https://www.mobilecallshield.com',
@@ -26,7 +26,6 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps, curl, postman)
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -57,7 +56,6 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     try {
-        // Check if user or recovery email already exists
         const existingUser = await pool.query(
             'SELECT * FROM users WHERE phone_number = $1 OR email = $2', 
             [phoneNumber, email]
@@ -67,16 +65,15 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
 
-        // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Save user to PostgreSQL database
         const newUser = await pool.query(
             'INSERT INTO users (name, phone_number, email, password_hash, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, name, phone_number, email',
             [name || 'User', phoneNumber, email, hashedPassword]
         );
 
         res.status(201).json({
+            success: true,
             message: 'User registered successfully!',
             user: newUser.rows[0]
         });
@@ -104,6 +101,7 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         res.status(200).json({
+            success: true,
             message: 'Login successful!',
             user: {
                 id: user.id,
@@ -122,7 +120,6 @@ app.post('/api/auth/login', async (req, res) => {
 // 4. Contacts CRUD API (Used by iOS ContactSyncManager & Web)
 // ----------------------------------------------------
 
-// GET /api/contacts?userId=42
 app.get('/api/contacts', async (req, res) => {
     const userId = req.query.userId;
     if (!userId) {
@@ -141,7 +138,6 @@ app.get('/api/contacts', async (req, res) => {
     }
 });
 
-// POST /api/contacts (Add/Shield a new contact)
 app.post('/api/contacts', async (req, res) => {
     const { userId, name, phoneNumber, isTrusted } = req.body;
 
@@ -172,7 +168,6 @@ app.post('/api/tester-feedback', async (req, res) => {
         console.log(`Tester: ${testerName} | Device: ${device}`);
         console.log(`Details: ${errorDetails}\n`);
 
-        // Save to PostgreSQL if table exists
         await pool.query(
             'INSERT INTO tester_feedback (tester_name, device, details, created_at) VALUES ($1, $2, $3, NOW())',
             [testerName, device, errorDetails]
@@ -202,17 +197,47 @@ app.post('/api/tester-feedback', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 6. Twilio Voice Webhook (Incoming Call Screening)
+// 6. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
+
+// Initial Call Greeting & Speech Gathering
 app.post('/voice', (req, res) => {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-        <Say voice="alice">Hello. This number is protected by Mobile Call Shield. Please speak your name or passphrase after the tone to connect your call.</Say>
-        <Record maxLength="10" action="/process-passphrase" />
-    </Response>`;
-    
+    const twiml = new twilio.twiml.VoiceResponse();
+
+    const gather = twiml.gather({
+        input: 'speech',
+        action: '/process-passphrase',
+        method: 'POST',
+        timeout: 5,
+        speechTimeout: 'auto'
+    });
+
+    gather.say({ voice: 'alice' }, 'Hello. This number is protected by Mobile Call Shield. Please state your name or passphrase after the tone.');
+
+    twiml.say({ voice: 'alice' }, 'We did not receive any response. Goodbye.');
+    twiml.hangup();
+
     res.type('text/xml');
-    res.send(twiml);
+    res.send(twiml.toString());
+});
+
+// Passphrase Processing Endpoint
+app.post('/process-passphrase', (req, res) => {
+    const twiml = new twilio.twiml.VoiceResponse();
+    const spokenPassphrase = req.body.SpeechResult || '';
+
+    console.log(`[Twilio Call] Caller said: "${spokenPassphrase}"`);
+
+    if (spokenPassphrase.trim().length > 0) {
+        twiml.say({ voice: 'alice' }, 'Passphrase accepted. Connecting your call now.');
+        twiml.dial('+1YOURPHONE_NUMBER_HERE'); // Replace with your actual forwarding phone number
+    } else {
+        twiml.say({ voice: 'alice' }, 'Passphrase not recognized. Access denied.');
+        twiml.hangup();
+    }
+
+    res.type('text/xml');
+    res.send(twiml.toString());
 });
 
 // ----------------------------------------------------
