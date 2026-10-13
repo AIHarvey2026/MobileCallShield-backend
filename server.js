@@ -1,4 +1,4 @@
-const express = require('express');
+cconst express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
@@ -200,7 +200,7 @@ app.post('/voice', async (req, res) => {
 
     try {
         const userResult = await pool.query(`
-            SELECT u.owner_phone, u.is_call_shield_enabled 
+            SELECT u.id, u.owner_phone, u.is_call_shield_enabled 
             FROM phone_numbers pn
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
@@ -211,6 +211,12 @@ app.post('/voice', async (req, res) => {
             
             if (user.is_call_shield_enabled === false) {
                 console.log(`[Call Shield Disabled] Direct dialing owner phone: ${user.owner_phone}`);
+                
+                await pool.query(
+                    'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
+                    [user.id, req.body.From, twilioNumber, 'DIRECT_DIAL']
+                ).catch(err => console.error('Error logging direct dial:', err));
+
                 twiml.dial(user.owner_phone);
                 res.type('text/xml');
                 return res.send(twiml.toString());
@@ -269,9 +275,19 @@ app.post('/process-passphrase', async (req, res) => {
         const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
         if (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode)) {
+            await pool.query(
+                'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
+                [user.id, req.body.From, twilioNumber, 'PASSED_PASSCODE']
+            ).catch(err => console.error('Error logging passed passcode:', err));
+
             twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Passcode accepted. Connecting your call now.');
             twiml.dial(forwardNumber);
         } else {
+            await pool.query(
+                'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
+                [user.id, req.body.From, twilioNumber, 'SENT_TO_VOICEMAIL']
+            ).catch(err => console.error('Error logging voicemail redirect:', err));
+
             twiml.say({ 
                 voice: 'Polly.Matthew-Neural' 
             }, 'Passcode not recognized. If you are a doctor, pharmacy, or family member, please leave a message after the tone with your name and callback number. Press pound when finished.');
@@ -293,13 +309,32 @@ app.post('/process-passphrase', async (req, res) => {
     res.send(twiml.toString());
 });
 
-app.post('/save-voicemail', (req, res) => {
+app.post('/save-voicemail', async (req, res) => {
     const recordingUrl = req.body.RecordingUrl;
     const callerNumber = req.body.From;
     const calledNumber = req.body.To;
 
     console.log(`[Voicemail Received] From: ${callerNumber} | To: ${calledNumber}`);
-    console.log(`Recording Audio URL: ${recordingUrl}.mp3`);
+
+    try {
+        const userResult = await pool.query(`
+            SELECT u.id FROM phone_numbers pn
+            JOIN users u ON pn.user_id = u.id
+            WHERE pn.phone_number = $1 AND pn.is_active = true
+        `, [calledNumber]);
+
+        if (userResult.rows.length > 0) {
+            const userId = userResult.rows[0].id;
+            await pool.query(`
+                UPDATE call_logs 
+                SET voicemail_url = $1 
+                WHERE user_id = $2 AND caller_phone = $3 AND voicemail_url IS NULL 
+                AND created_at >= NOW() - INTERVAL '10 minutes'
+            `, [`${recordingUrl}.mp3`, userId, callerNumber]);
+        }
+    } catch (err) {
+        console.error('Error saving voicemail log URL:', err);
+    }
 
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Thank you. Your message has been saved. Goodbye.');
@@ -350,8 +385,7 @@ app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
     }
 });
 
-
-// Fetch only contacts marked as guardians (for Guardian / Security settings screen)
+// Fetch only contacts marked as guardians
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -359,7 +393,6 @@ app.get('/api/guardians/:userId', async (req, res) => {
             'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
             [userId]
         );
-        // Formatted to match what your iOS guardian view expects
         const formatted = result.rows.map(row => ({
             id: row.id,
             guardian_name: row.name,
@@ -413,7 +446,7 @@ app.put('/api/user/passcode', async (req, res) => {
     }
 });
 
-// POST /api/trusted-contacts/bulk (Single source of truth insert)
+// POST /api/trusted-contacts/bulk
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         const { userId, contacts } = req.body;
@@ -462,6 +495,21 @@ app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     } catch (err) {
         console.error('Error updating guardian mode toggle:', err);
         res.status(500).json({ error: 'Server error updating guardian mode status.' });
+    }
+});
+
+// Fetch Call Logs for a User
+app.get('/api/call-logs/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(
+            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching call logs:', err);
+        res.status(500).json({ error: 'Server error fetching call logs.' });
     }
 });
 
