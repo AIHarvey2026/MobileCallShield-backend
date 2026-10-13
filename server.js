@@ -67,18 +67,18 @@ app.get('/api/settings', async (req, res) => {
 
 // POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
-    const { name, phoneNumber, email, password } = req.body;
+    const { name, phoneNumber, email, password, pin } = req.body;
 
-    if (!phoneNumber || !password || !email) {
-        return res.status(400).json({ error: 'Phone number, email, and password are required.' });
+    if (!phoneNumber || !password || !email || !pin) {
+        return res.status(400).json({ error: 'Phone number, email, password, and PIN are required.' });
     }
 
     try {
         const existingUser = await pool.query(
-            'SELECT * FROM users WHERE owner_phone = $1 OR email = $2 OR user_name = $2', 
+            'SELECT * FROM users WHERE owner_phone = $1 OR email = $2', 
             [phoneNumber, email]
         );
-        
+
         if (existingUser.rows.length > 0) {
             return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
@@ -86,8 +86,8 @@ app.post('/api/auth/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newUser = await pool.query(
-            'INSERT INTO users (user_name, owner_phone, email, password, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id, user_name, owner_phone, email',
-            [email, phoneNumber, email, hashedPassword]
+            'INSERT INTO users (user_name, owner_phone, email, password, pin, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, user_name, owner_phone, email',
+            [email, phoneNumber, email, hashedPassword, pin]
         );
 
         res.status(201).json({
@@ -585,8 +585,41 @@ app.delete('/api/call-logs/:id', async (req, res) => {
     }
 });
 
+
 // ----------------------------------------------------
-// 7. Start Express Server
+// 7. Update Pin (users table)
+// ----------------------------------------------------
+
+app.put('/api/user/update-pin', async (req, res) => {
+    const { userId, currentPin, newPin } = req.body;
+
+    if (!userId || !currentPin || !newPin) {
+        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbPin = userResult.rows[0].pin || '1234';
+        if (currentPin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
+        }
+
+        await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
+        res.json({ success: true, message: 'PIN updated successfully.' });
+    } catch (err) {
+        console.error('Error updating PIN:', err);
+        res.status(500).json({ error: 'Server error updating PIN.' });
+    }
+});
+
+
+
+// ----------------------------------------------------
+// 8. Start Express Server
 // ----------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Mobile Call Shield Server running on port ${PORT}`);
