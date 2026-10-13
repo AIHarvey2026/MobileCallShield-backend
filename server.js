@@ -350,13 +350,18 @@ app.get('/api/guardians/:userId', async (req, res) => {
 });
 
 // Delete a trusted contact by ID
-app.delete('/api/guardians/:id', async (req, res) => {
-    const guardianId = req.params.id;
+app.delete('/api/trusted-contacts/:id', async (req, res) => {
+    const contactId = req.params.id;
     try {
-        await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [guardianId]);
+        const result = await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [contactId]);
+        
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Contact not found.' });
+        }
+
         res.json({ success: true, message: 'Contact deleted successfully.' });
     } catch (err) {
-        console.error('Error deleting contact:', err);
+        console.error('Error deleting trusted contact:', err);
         res.status(500).json({ error: 'Server error deleting contact.' });
     }
 });
