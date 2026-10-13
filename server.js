@@ -422,6 +422,35 @@ app.delete('/api/trusted-contacts/:id', async (req, res) => {
     }
 });
 
+// Set a contact as Primary Guardian
+app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
+    const contactId = req.params.id;
+    const { userId } = req.body;
+
+    try {
+        // 1. Reset is_primary for all contacts of this user
+        await pool.query(
+            'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
+            [userId]
+        );
+
+        // 2. Set the chosen contact as primary (and ensure they are marked as a guardian)
+        const result = await pool.query(
+            'UPDATE trusted_contacts SET is_primary = true, is_guardian = true WHERE id = $1 AND user_id = $2',
+            [contactId, userId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Contact not found.' });
+        }
+
+        res.json({ success: true, message: 'Primary Guardian updated successfully.' });
+    } catch (err) {
+        console.error('Error setting primary guardian:', err);
+        res.status(500).json({ error: 'Server error updating primary guardian.' });
+    }
+});
+
 // Passcode Management Route
 app.put('/api/user/passcode', async (req, res) => {
     const { userId, passcode } = req.body;
