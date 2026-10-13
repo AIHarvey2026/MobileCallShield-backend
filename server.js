@@ -452,27 +452,34 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     }
 });
 
-// Passcode Management Route
+// Passcode Management Route - the primary guardian will control the guardian settings
+
 app.put('/api/user/passcode', async (req, res) => {
-    const { userId, passcode } = req.body;
-
-    if (!userId || !passcode) {
-        return res.status(400).json({ error: 'userId and passcode are required.' });
-    }
-
     try {
+        const { userId, passcode, requesterContactId } = req.body;
+
+        // Verify if the requester is a primary guardian for this user
+        const primaryCheck = await pool.query(
+            'SELECT * FROM trusted_contacts WHERE id = $1 AND user_id = $2 AND is_primary = true',
+            [requesterContactId, userId]
+        );
+
+        // Alternatively, if the senior owner is acting as their own primary guardian, 
+        // you can also allow it if authorized. For strict guardian-only control:
+        if (primaryCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Unauthorized: Only the primary guardian can change the security PIN.' });
+        }
+
+        // Update the pin in the users table
         await pool.query(
-            'UPDATE users SET passcode = $1 WHERE id = $2',
+            'UPDATE users SET pin = $1 WHERE id = $2',
             [passcode, userId]
         );
 
-        res.json({
-            success: true,
-            message: 'Passcode updated successfully.'
-        });
+        res.json({ success: true, message: 'PIN updated successfully by primary guardian.' });
     } catch (err) {
         console.error('Error updating passcode:', err);
-        res.status(500).json({ error: 'Server error updating passcode.' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
