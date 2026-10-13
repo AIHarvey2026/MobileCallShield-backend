@@ -406,16 +406,28 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         }
 
         for (const contact of contacts) {
+            const isGuardian = contact.is_guardian || false;
+
+            // 1. Insert/Update trusted_contacts table
             await pool.query(
                 `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT (user_id, phone_number) 
                  DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian`,
-                [userId, contact.name, contact.phone_number, contact.is_guardian || false]
+                [userId, contact.name, contact.phone_number, isGuardian]
             );
+
+            // 2. If flagged as guardian, insert into user_guardians table
+            if (isGuardian === true) {
+                await pool.query(
+                    `INSERT INTO user_guardians (user_id, name, phone_number) 
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT DO NOTHING`,
+                    [userId, contact.name, contact.phone_number]
+                ).catch(err => console.log('Notice: user_guardians insert handled:', err.message));
+            }
         }
 
-        // Must return valid JSON object
         res.status(201).json({ success: true, message: "Contacts saved successfully" });
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
