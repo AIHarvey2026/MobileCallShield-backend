@@ -420,7 +420,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             // 2. If flagged as guardian, insert into user_guardians table
             if (isGuardian === true) {
                 await pool.query(
-                    `INSERT INTO user_guardians (user_id, name, phone_number) 
+                    `INSERT INTO user_guardians (user_id, guardian_name, guardian_phone) 
                      VALUES ($1, $2, $3)
                      ON CONFLICT DO NOTHING`,
                     [userId, contact.name, contact.phone_number]
