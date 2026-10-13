@@ -67,7 +67,7 @@ app.get('/api/settings', async (req, res) => {
 
 // POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
-    const { name, phoneNumber, email, password, pin } = req.body;
+    const { name, phoneNumber, email, password, pin, passcode } = req.body;
 
     if (!phoneNumber || !password || !email || !pin) {
         return res.status(400).json({ error: 'Phone number, email, password, and PIN are required.' });
@@ -84,10 +84,11 @@ app.post('/api/auth/register', async (req, res) => {
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
+        const userPasscode = passcode || '1234';
 
         const newUser = await pool.query(
-            'INSERT INTO users (user_name, owner_phone, email, password, pin, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, user_name, owner_phone, email',
-            [email, phoneNumber, email, hashedPassword, pin]
+            'INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, user_name, owner_phone, email, passcode',
+            [email, phoneNumber, email, hashedPassword, pin, userPasscode]
         );
 
         res.status(201).json({
@@ -97,7 +98,8 @@ app.post('/api/auth/register', async (req, res) => {
                 id: newUser.rows[0].id,
                 name: newUser.rows[0].user_name,
                 phoneNumber: newUser.rows[0].owner_phone,
-                email: newUser.rows[0].email
+                email: newUser.rows[0].email,
+                passcode: newUser.rows[0].passcode
             }
         });
     } catch (err) {
@@ -429,13 +431,11 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     const { userId } = req.body;
 
     try {
-        // 1. Reset is_primary for all contacts of this user
         await pool.query(
             'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
             [userId]
         );
 
-        // 2. Set the chosen contact as primary (and ensure they are marked as a guardian)
         const result = await pool.query(
             'UPDATE trusted_contacts SET is_primary = true, is_guardian = true WHERE id = $1 AND user_id = $2',
             [contactId, userId]
@@ -449,37 +449,6 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     } catch (err) {
         console.error('Error setting primary guardian:', err);
         res.status(500).json({ error: 'Server error updating primary guardian.' });
-    }
-});
-
-// Passcode Management Route - the primary guardian will control the guardian settings
-
-app.put('/api/user/passcode', async (req, res) => {
-    try {
-        const { userId, passcode, requesterContactId } = req.body;
-
-        // Verify if the requester is a primary guardian for this user
-        const primaryCheck = await pool.query(
-            'SELECT * FROM trusted_contacts WHERE id = $1 AND user_id = $2 AND is_primary = true',
-            [requesterContactId, userId]
-        );
-
-        // Alternatively, if the senior owner is acting as their own primary guardian, 
-        // you can also allow it if authorized. For strict guardian-only control:
-        if (primaryCheck.rows.length === 0) {
-            return res.status(403).json({ error: 'Unauthorized: Only the primary guardian can change the security PIN.' });
-        }
-
-        // Update the pin in the users table
-        await pool.query(
-            'UPDATE users SET pin = $1 WHERE id = $2',
-            [passcode, userId]
-        );
-
-        res.json({ success: true, message: 'PIN updated successfully by primary guardian.' });
-    } catch (err) {
-        console.error('Error updating passcode:', err);
-        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -574,53 +543,4 @@ app.get('/api/call-logs/:userId', async (req, res) => {
 app.delete('/api/call-logs/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('DELETE FROM call_logs WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Call log not found.' });
-        }
-        res.json({ success: true, message: 'Call log deleted successfully.' });
-    } catch (err) {
-        console.error('Error deleting call log:', err);
-        res.status(500).json({ error: 'Server error deleting call log.' });
-    }
-});
-
-
-// ----------------------------------------------------
-// 7. Update Pin (users table)
-// ----------------------------------------------------
-
-app.put('/api/user/update-pin', async (req, res) => {
-    const { userId, currentPin, newPin } = req.body;
-
-    if (!userId || !currentPin || !newPin) {
-        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
-    }
-
-    try {
-        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-
-        const dbPin = userResult.rows[0].pin || '1234';
-        if (currentPin !== dbPin) {
-            return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
-        }
-
-        await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
-        res.json({ success: true, message: 'PIN updated successfully.' });
-    } catch (err) {
-        console.error('Error updating PIN:', err);
-        res.status(500).json({ error: 'Server error updating PIN.' });
-    }
-});
-
-
-
-// ----------------------------------------------------
-// 8. Start Express Server
-// ----------------------------------------------------
-app.listen(PORT, () => {
-    console.log(`Mobile Call Shield Server running on port ${PORT}`);
-});
+        const result = await pool
