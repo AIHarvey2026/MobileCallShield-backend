@@ -380,6 +380,22 @@ app.put('/api/user/passcode', async (req, res) => {
     }
 });
 
+// Fetch trusted contacts for iOS client
+app.get('/api/trusted-contacts/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(
+            'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1', 
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching trusted contacts:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+
 // POST /api/trusted-contacts/bulk
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
@@ -399,7 +415,8 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             );
         }
 
-        res.status(201).json({ message: "Contacts saved successfully" });
+        // Must return valid JSON object
+        res.status(201).json({ success: true, message: "Contacts saved successfully" });
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
         res.status(500).json({ error: err.message });
