@@ -539,10 +539,10 @@ app.put('/api/user/toggle-guardian-mode', async (req, res) => {
 app.put('/api/user/toggle-shield', async (req, res) => {
     const { userId, isEnabled, pin } = req.body;
     try {
-        const userResult = await pool.query('SELECT guardian_pin FROM users WHERE id = $1', [userId]);
+        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
         
-        const dbPin = userResult.rows[0].guardian_pin || '1234';
+        const dbPin = userResult.rows[0].pin || '1234';
         if (!isEnabled && pin !== dbPin) {
             return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
         }
