@@ -390,13 +390,14 @@ app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const result = await pool.query(
-            'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
+            'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
             [userId]
         );
         const formatted = result.rows.map(row => ({
             id: row.id,
             guardian_name: row.name,
-            guardian_phone: row.phone_number
+            guardian_phone: row.phone_number,
+            is_primary: row.is_primary
         }));
         res.json(formatted);
     } catch (err) {
