@@ -328,6 +328,29 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     }
 });
 
+// Toggle guardian status directly by contact ID
+app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
+    const contactId = req.params.id;
+    const { is_guardian } = req.body;
+    
+    try {
+        const result = await pool.query(
+            'UPDATE trusted_contacts SET is_guardian = $1 WHERE id = $2',
+            [is_guardian, contactId]
+        );
+        
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Contact not found.' });
+        }
+
+        res.json({ success: true, message: 'Guardian status updated successfully.' });
+    } catch (err) {
+        console.error('Error updating guardian status:', err);
+        res.status(500).json({ error: 'Server error updating guardian status.' });
+    }
+});
+
+
 // Fetch only contacts marked as guardians (for Guardian / Security settings screen)
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
