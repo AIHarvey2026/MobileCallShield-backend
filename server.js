@@ -498,6 +498,26 @@ app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     }
 });
 
+// Toggle Call Shield Status (Requires Primary Guardian PIN verification)
+app.put('/api/user/toggle-shield', async (req, res) => {
+    const { userId, isEnabled, pin } = req.body;
+    try {
+        const userResult = await pool.query('SELECT guardian_pin FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        
+        const dbPin = userResult.rows[0].guardian_pin || '1234';
+        if (!isEnabled && pin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
+        }
+
+        await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
+        res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
+    } catch (err) {
+        console.error('Error toggling shield:', err);
+        res.status(500).json({ error: 'Server error updating shield status.' });
+    }
+});
+
 // Fetch Call Logs for a User
 app.get('/api/call-logs/:userId', async (req, res) => {
     try {
@@ -510,6 +530,21 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     } catch (err) {
         console.error('Error fetching call logs:', err);
         res.status(500).json({ error: 'Server error fetching call logs.' });
+    }
+});
+
+// Delete a specific call log
+app.delete('/api/call-logs/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM call_logs WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Call log not found.' });
+        }
+        res.json({ success: true, message: 'Call log deleted successfully.' });
+    } catch (err) {
+        console.error('Error deleting call log:', err);
+        res.status(500).json({ error: 'Server error deleting call log.' });
     }
 });
 
