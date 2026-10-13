@@ -392,7 +392,9 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         for (const contact of contacts) {
             await pool.query(
                 `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
-                 VALUES ($1, $2, $3, $4)`,
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (user_id, phone_number) 
+                 DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian`,
                 [userId, contact.name, contact.phone_number, contact.is_guardian || false]
             );
         }
@@ -401,30 +403,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
         res.status(500).json({ error: err.message });
-    }
-});
-
-// Toggle Call Shield Status Route
-app.put('/api/user/toggle-shield', async (req, res) => {
-    const { userId, isEnabled } = req.body;
-
-    if (userId === undefined || isEnabled === undefined) {
-        return res.status(400).json({ error: 'userId and isEnabled status are required.' });
-    }
-
-    try {
-        await pool.query(
-            'UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2',
-            [isEnabled, userId]
-        );
-
-        res.json({
-            success: true,
-            message: `Call shield status updated to ${isEnabled}.`
-        });
-    } catch (err) {
-        console.error('Error updating call shield toggle:', err);
-        res.status(500).json({ error: 'Server error updating call shield status.' });
     }
 });
 
