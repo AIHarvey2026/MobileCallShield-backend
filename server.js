@@ -310,14 +310,33 @@ app.post('/save-voicemail', (req, res) => {
 });
 
 // ----------------------------------------------------
-// 6. Guardian Management Routes
+// 6. Trusted Contacts & Guardian Routes
 // ----------------------------------------------------
 
-// Fetch trusted contacts / guardians
+// Fetch all trusted contacts for a user
+app.get('/api/trusted-contacts/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(
+            'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1', 
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching trusted contacts:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Fetch only contacts marked as guardians (for Guardian / Security settings screen)
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        const result = await pool.query('SELECT * FROM trusted_contacts WHERE user_id = $1', [userId]);
+        const result = await pool.query(
+            'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
+            [userId]
+        );
+        // Formatted to match what your iOS guardian view expects
         const formatted = result.rows.map(row => ({
             id: row.id,
             guardian_name: row.name,
@@ -330,29 +349,15 @@ app.get('/api/guardians/:userId', async (req, res) => {
     }
 });
 
-// Add trusted contact / guardian
-app.post('/api/guardians', async (req, res) => {
-    try {
-        const { userId, guardian_name, guardian_phone } = req.body;
-        const result = await pool.query(
-            'INSERT INTO trusted_contacts (user_id, name, phone_number) VALUES ($1, $2, $3) RETURNING *',
-            [userId, guardian_name, guardian_phone]
-        );
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error('Error adding guardian:', err);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
+// Delete a trusted contact by ID
 app.delete('/api/guardians/:id', async (req, res) => {
     const guardianId = req.params.id;
     try {
         await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [guardianId]);
-        res.json({ success: true, message: 'Guardian deleted successfully.' });
+        res.json({ success: true, message: 'Contact deleted successfully.' });
     } catch (err) {
-        console.error('Error deleting guardian:', err);
-        res.status(500).json({ error: 'Server error deleting guardian.' });
+        console.error('Error deleting contact:', err);
+        res.status(500).json({ error: 'Server error deleting contact.' });
     }
 });
 
@@ -380,23 +385,7 @@ app.put('/api/user/passcode', async (req, res) => {
     }
 });
 
-// Fetch trusted contacts for iOS client
-app.get('/api/trusted-contacts/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const result = await pool.query(
-            'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1', 
-            [userId]
-        );
-        res.json(result.rows);
-    } catch (err) {
-        console.error('Error fetching trusted contacts:', err);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-
-// POST /api/trusted-contacts/bulk
+// POST /api/trusted-contacts/bulk (Single source of truth insert)
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         const { userId, contacts } = req.body;
@@ -408,7 +397,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         for (const contact of contacts) {
             const isGuardian = contact.is_guardian || false;
 
-            // 1. Insert/Update trusted_contacts table
             await pool.query(
                 `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
                  VALUES ($1, $2, $3, $4)
@@ -416,16 +404,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                  DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian`,
                 [userId, contact.name, contact.phone_number, isGuardian]
             );
-
-            // 2. If flagged as guardian, insert into user_guardians table
-            if (isGuardian === true) {
-                await pool.query(
-                    `INSERT INTO user_guardians (user_id, guardian_name, guardian_phone) 
-                     VALUES ($1, $2, $3)
-                     ON CONFLICT DO NOTHING`,
-                    [userId, contact.name, contact.phone_number]
-                ).catch(err => console.log('Notice: user_guardians insert handled:', err.message));
-            }
         }
 
         res.status(201).json({ success: true, message: "Contacts saved successfully" });
