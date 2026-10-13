@@ -353,7 +353,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const result = await pool.query(
-            'SELECT id, user_id, name, phone_number, is_guardian FROM trusted_contacts WHERE user_id = $1', 
+            'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1', 
             [userId]
         );
         res.json(result.rows);
