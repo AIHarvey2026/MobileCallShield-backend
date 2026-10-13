@@ -318,11 +318,10 @@ app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const result = await pool.query('SELECT * FROM trusted_contacts WHERE user_id = $1', [userId]);
-        // Map columns if needed to match your iOS model (guardian_name / guardian_phone)
         const formatted = result.rows.map(row => ({
             id: row.id,
-            guardian_name: row.name, // Adjust 'name' if your column is named differently
-            guardian_phone: row.phone // Adjust 'phone' if your column is named differently
+            guardian_name: row.name,
+            guardian_phone: row.phone_number
         }));
         res.json(formatted);
     } catch (err) {
@@ -336,7 +335,7 @@ app.post('/api/guardians', async (req, res) => {
     try {
         const { userId, guardian_name, guardian_phone } = req.body;
         const result = await pool.query(
-            'INSERT INTO trusted_contacts (user_id, name, phone) VALUES ($1, $2, $3) RETURNING *',
+            'INSERT INTO trusted_contacts (user_id, name, phone_number) VALUES ($1, $2, $3) RETURNING *',
             [userId, guardian_name, guardian_phone]
         );
         res.json(result.rows[0]);
@@ -345,7 +344,6 @@ app.post('/api/guardians', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
-
 
 app.delete('/api/guardians/:id', async (req, res) => {
     const guardianId = req.params.id;
@@ -379,6 +377,30 @@ app.put('/api/user/passcode', async (req, res) => {
     } catch (err) {
         console.error('Error updating passcode:', err);
         res.status(500).json({ error: 'Server error updating passcode.' });
+    }
+});
+
+// POST /api/trusted-contacts/bulk
+app.post('/api/trusted-contacts/bulk', async (req, res) => {
+    try {
+        const { userId, contacts } = req.body;
+        
+        if (!userId || !contacts || !Array.isArray(contacts)) {
+            return res.status(400).json({ error: "Invalid payload format" });
+        }
+
+        for (const contact of contacts) {
+            await pool.query(
+                `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
+                 VALUES ($1, $2, $3, $4)`,
+                [userId, contact.name, contact.phone_number, contact.is_guardian || false]
+            );
+        }
+
+        res.status(201).json({ message: "Contacts saved successfully" });
+    } catch (err) {
+        console.error("❌ Database error during bulk save:", err);
+        res.status(500).json({ error: err.message });
     }
 });
 
