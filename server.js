@@ -556,7 +556,7 @@ app.delete('/api/call-logs/:id', async (req, res) => {
     }
 });
 
-// Update Pin
+// Update Guardian Passcode
 app.put('/api/user/update-pin', async (req, res) => {
     const { userId, currentPin, newPin } = req.body;
 
@@ -565,18 +565,18 @@ app.put('/api/user/update-pin', async (req, res) => {
     }
 
     try {
-        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) {
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        const dbPin = userResult.rows[0].pin || '1234';
+        const dbPin = userResult.rows[0].guardian_code || '1234';
         if (currentPin !== dbPin) {
             return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
         }
 
-        await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
-        res.json({ success: true, message: 'PIN updated successfully.' });
+        await pool.query('UPDATE users SET guardian_code = $1 WHERE id = $2', [newPin, userId]);
+        res.json({ success: true, message: 'Guardian passcode updated successfully.' });
     } catch (err) {
         console.error('Error updating PIN:', err);
         res.status(500).json({ error: 'Server error updating PIN.' });
