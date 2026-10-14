@@ -512,12 +512,16 @@ app.put('/api/user/toggle-guardian-mode', async (req, res) => {
 app.put('/api/user/toggle-shield', async (req, res) => {
     const { userId, isEnabled, pin } = req.body;
     try {
-        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
 
-        const dbPin = userResult.rows[0].pin || '1234';
-        if (!isEnabled && pin !== dbPin) {
-            return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
+        const dbPin = userResult.rows[0].guardian_code;
+
+        // Only require and check PIN if the user has set a guardian_code and is turning the shield OFF
+        if (!isEnabled && dbPin && dbPin.trim() !== '') {
+            if (pin !== dbPin) {
+                return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
+            }
         }
 
         await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
