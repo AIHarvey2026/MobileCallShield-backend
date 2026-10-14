@@ -3,6 +3,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const twilio = require('twilio');
+const rateLimit = require('express-rate-limit'); // Added rate limiter package
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,6 +39,18 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Rate Limiter for Authentication Routes (Protects against brute-force / bots)
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes window
+    max: 10, // Limit each IP address to 10 requests per 15-minute window
+    standardHeaders: true, 
+    legacyHeaders: false, 
+    message: {
+        success: false,
+        error: "Too many authentication attempts from this device. Please try again after 15 minutes."
+    }
+});
+
 // Health Check Endpoint for UptimeRobot / Monitoring
 app.get('/health', (req, res) => {
     res.status(200).send('Mobile Call Shield Backend is active and healthy.');
@@ -62,10 +75,10 @@ app.get('/api/settings', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 3. User Authentication Routes
+// 3. User Authentication Routes (Protected by authLimiter)
 // ----------------------------------------------------
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
     const { name, phoneNumber, email, password, pin, passcode } = req.body;
 
     if (!phoneNumber || !password || !email || !pin) {
@@ -108,7 +121,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // Login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
 
     console.log(`[Login Attempt] Email received: "${email}" | Password received: "${password}"`);
@@ -543,7 +556,6 @@ app.delete('/api/call-logs/:id', async (req, res) => {
     }
 });
 
-
 // Update Pin
 app.put('/api/user/update-pin', async (req, res) => {
     const { userId, currentPin, newPin } = req.body;
@@ -572,7 +584,6 @@ app.put('/api/user/update-pin', async (req, res) => {
 });
 
 // Update Passcode
-
 app.post('/api/settings/update-passcode', async (req, res) => {
     const { userId, pin, newPasscode } = req.body;
 
@@ -581,13 +592,11 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 
     try {
-        // Verify PIN first
         const userCheck = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
         if (userCheck.rows.length === 0 || userCheck.rows[0].pin !== pin) {
             return res.status(401).json({ error: 'Incorrect owner PIN.' });
         }
 
-        // Update Passcode
         const result = await pool.query(
             'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
             [newPasscode, userId]
