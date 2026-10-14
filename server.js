@@ -4,9 +4,20 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const twilio = require('twilio');
 const rateLimit = require('express-rate-limit'); // Added rate limiter package
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST, // e.g., smtp.sendgrid.net or smtp.gmail.com
+    port: process.env.EMAIL_PORT || 587,
+    secure: false, // true for 465, false for other ports
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
 
 // ----------------------------------------------------
 // 1. Database Connection (PostgreSQL on Render)
@@ -109,6 +120,45 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             [name || email, phoneNumber, email, password, pin, userPasscode, trialEnd]
         );
 
+        // ----------------------------------------------------
+        // Send Trial Welcome Email Inside Route Handler
+        // ----------------------------------------------------
+        const formattedTrialEnd = trialEnd.toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+
+        const mailOptions = {
+            from: '"Senior Scam Shield" <support@mobilecallshield.com>',
+            to: email,
+            subject: 'Welcome to Senior Scam Shield! Your 14-Day Free Trial Has Started',
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                    <h2 style="color: #2563eb; margin-top: 0;">Welcome to Senior Scam Shield, ${name || 'Friend'}!</h2>
+                    <p>Your account has been successfully created, and your <strong>14-day free trial</strong> is now active.</p>
+                    
+                    <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #2563eb;">
+                        <p style="margin: 0; font-size: 15px;"><strong>Trial End Date:</strong> ${formattedTrialEnd}</p>
+                        <p style="margin: 5px 0 0 0; font-size: 13px; color: #64748b;">You will have full access to call screening, trusted contacts, and voicemail playback during your trial without any charges.</p>
+                    </div>
+
+                    <p>If you have any questions or need assistance setting up your phone forwarding, feel free to reply directly to this email or visit our support portal.</p>
+                    
+                    <p style="margin-top: 30px; font-size: 14px; color: #64748b;">Stay protected,<br><strong>The Senior Scam Shield Team</strong></p>
+                </div>
+            `
+        };
+
+        transporter.sendMail(mailOptions, (error, info) => {
+            if (error) {
+                console.error('Error sending trial welcome email:', error);
+            } else {
+                console.log('Trial welcome email sent:', info.response);
+            }
+        });
+
         res.status(201).json({
             success: true,
             message: 'User registered successfully with a 14-day free trial!',
@@ -207,6 +257,61 @@ app.post('/api/tester-feedback', async (req, res) => {
     } catch (err) {
         console.error('Error logging feedback:', err);
         res.status(500).send('Error logging feedback report.');
+    }
+});
+
+// ----------------------------------------------------
+// Subscription & Twilio Number Provisioning Endpoint
+// ----------------------------------------------------
+app.post('/api/subscription/activate', async (req, res) => {
+    const { userId, areaCode } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is required.' });
+    }
+
+    try {
+        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+        const availableNumbers = await twilioClient.availablePhoneNumbers('US')
+            .local
+            .list({ areaCode: areaCode || undefined, limit: 1 });
+
+        if (availableNumbers.length === 0) {
+            return res.status(404).json({ error: 'No available phone numbers found for this area code.' });
+        }
+
+        const targetNumber = availableNumbers[0].phoneNumber;
+
+        const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({
+            phoneNumber: targetNumber,
+            voiceUrl: 'https://mobilecallshield-backend.onrender.com/voice',
+            voiceMethod: 'POST'
+        });
+
+        await pool.query(
+            'UPDATE users SET subscription_status = $1 WHERE id = $2',
+            ['active', userId]
+        );
+
+        await pool.query(
+            `INSERT INTO phone_numbers (user_id, phone_number, is_active) 
+             VALUES ($1, $2, true)
+             ON CONFLICT DO NOTHING`,
+            [userId, purchasedNumber.phoneNumber]
+        );
+
+        console.log(`[Subscription Activated] User ID ${userId} assigned Twilio number: ${purchasedNumber.phoneNumber}`);
+
+        res.json({
+            success: true,
+            assignedPhoneNumber: purchasedNumber.phoneNumber,
+            message: 'Subscription activated and phone number successfully assigned!'
+        });
+
+    } catch (err) {
+        console.error('Error provisioning Twilio phone number:', err);
+        res.status(500).json({ error: 'Failed to provision phone number from Twilio.' });
     }
 });
 
@@ -489,143 +594,3 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         res.status(201).json({ success: true, message: "Contacts saved successfully" });
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.put('/api/user/toggle-guardian-mode', async (req, res) => {
-    const { userId, isGuardianEnabled } = req.body;
-
-    if (userId === undefined || isGuardianEnabled === undefined) {
-        return res.status(400).json({ error: 'userId and isGuardianEnabled status are required.' });
-    }
-
-    try {
-        await pool.query(
-            'UPDATE users SET is_guardian_mode_enabled = $1 WHERE id = $2',
-            [isGuardianEnabled, userId]
-        );
-
-        res.json({
-            success: true,
-            message: `Guardian Mode updated to ${isGuardianEnabled}.`
-        });
-    } catch (err) {
-        console.error('Error updating guardian mode toggle:', err);
-        res.status(500).json({ error: 'Server error updating guardian mode status.' });
-    }
-});
-
-app.put('/api/user/toggle-shield', async (req, res) => {
-    const { userId, isEnabled, pin } = req.body;
-    try {
-        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
-        const dbPin = userResult.rows[0].guardian_code;
-
-        // If this evaluates to true, it requires the PIN check!
-        if (!isEnabled && dbPin && dbPin.trim() !== '') {
-            if (pin !== dbPin) {
-                return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
-            }
-        }
-
-        await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
-        res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
-    } catch (err) {
-        console.error('Error toggling shield:', err);
-        res.status(500).json({ error: 'Server error updating shield status.' });
-    }
-});
-
-app.get('/api/call-logs/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const result = await pool.query(
-            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-            [userId]
-        );
-        res.json(result.rows);
-    } catch (err) {
-        console.error('Error fetching call logs:', err);
-        res.status(500).json({ error: 'Server error fetching call logs.' });
-    }
-});
-
-app.delete('/api/call-logs/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query('DELETE FROM call_logs WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Call log not found.' });
-        }
-        res.json({ success: true, message: 'Call log deleted successfully.' });
-    } catch (err) {
-        console.error('Error deleting call log:', err);
-        res.status(500).json({ error: 'Server error deleting call log.' });
-    }
-});
-
-// Update Guardian Passcode
-app.put('/api/user/update-pin', async (req, res) => {
-    const { userId, currentPin, newPin } = req.body;
-
-    if (!userId || !currentPin || !newPin) {
-        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
-    }
-
-    try {
-        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-
-        const dbPin = userResult.rows[0].guardian_code || '1234';
-        if (currentPin !== dbPin) {
-            return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
-        }
-
-        await pool.query('UPDATE users SET guardian_code = $1 WHERE id = $2', [newPin, userId]);
-        res.json({ success: true, message: 'Guardian passcode updated successfully.' });
-    } catch (err) {
-        console.error('Error updating PIN:', err);
-        res.status(500).json({ error: 'Server error updating PIN.' });
-    }
-});
-
-// Update Passcode
-app.post('/api/settings/update-passcode', async (req, res) => {
-    const { userId, pin, newPasscode } = req.body;
-
-    if (!userId || !pin || !newPasscode) {
-        return res.status(400).json({ error: 'User ID, PIN, and new passcode are required.' });
-    }
-
-    try {
-        const userCheck = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
-        if (userCheck.rows.length === 0 || userCheck.rows[0].pin !== pin) {
-            return res.status(401).json({ error: 'Incorrect owner PIN.' });
-        }
-
-        const result = await pool.query(
-            'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
-            [newPasscode, userId]
-        );
-
-        res.status(200).json({
-            success: true,
-            message: 'Passcode updated successfully!'
-        });
-    } catch (err) {
-        console.error('Error updating passcode:', err);
-        res.status(500).json({ error: 'Server error updating passcode.' });
-    }
-});
-
-// ----------------------------------------------------
-// 7. Start Express Server
-// ----------------------------------------------------
-app.listen(PORT, () => {
-    console.log(`Mobile Call Shield Server running on port ${PORT}`);
-});
