@@ -65,7 +65,6 @@ app.get('/api/settings', async (req, res) => {
 // 3. User Authentication Routes
 // ----------------------------------------------------
 
-// POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
     const { name, phoneNumber, email, password, pin, passcode } = req.body;
 
@@ -83,12 +82,12 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
         const userPasscode = passcode || '1234';
 
+        // Storing password as plain text directly
         const newUser = await pool.query(
             'INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, user_name, owner_phone, email, passcode',
-            [email, phoneNumber, email, hashedPassword, pin, userPasscode]
+            [email, phoneNumber, email, password, pin, userPasscode]
         );
 
         res.status(201).json({
