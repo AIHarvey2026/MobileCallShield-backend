@@ -752,8 +752,140 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 });
 
+
+
+
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// 1. Create Stripe Checkout Session
+app.post('/api/create-checkout-session', async (req, res) => {
+    const { userId, areaCode } = req.body;
+
+    if (!userId || !areaCode) {
+        return res.status(400).json({ error: 'User ID and area code are required.' });
+    }
+
+    try {
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            mode: 'subscription',
+            line_items: [{
+                price: process.env.STRIPE_PRICE_ID, // Your recurring price ID from Stripe Dashboard
+                quantity: 1,
+            }],
+            metadata: {
+                userId: String(userId),
+                areaCode: areaCode
+            },
+            success_url: 'https://mobilecallshield.com/success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://mobilecallshield.com/cancel',
+        });
+
+        res.json({ success: true, url: session.url });
+    } catch (err) {
+        console.error('Error creating Stripe session:', err);
+        res.status(500).json({ error: 'Failed to create payment session.' });
+    }
+});
+
 // ----------------------------------------------------
-// 7. Start Express Server
+// 7. Stripe Payment & Webhook Routes
+// ----------------------------------------------------
+
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// Create Stripe Checkout Session
+app.post('/api/create-checkout-session', async (req, res) => {
+    const { userId, areaCode } = req.body;
+
+    if (!userId || !areaCode) {
+        return res.status(400).json({ error: 'User ID and area code are required.' });
+    }
+
+    try {
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            mode: 'subscription',
+            line_items: [{
+                price: process.env.STRIPE_PRICE_ID, // Your recurring price ID from Stripe Dashboard
+                quantity: 1,
+            }],
+            metadata: {
+                userId: String(userId),
+                areaCode: areaCode
+            },
+            success_url: 'https://mobilecallshield.com/success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://mobilecallshield.com/cancel',
+        });
+
+        res.json({ success: true, url: session.url });
+    } catch (err) {
+        console.error('Error creating Stripe session:', err);
+        res.status(500).json({ error: 'Failed to create payment session.' });
+    }
+});
+
+// Stripe Webhook (Processes successful payments & provisions Twilio numbers automatically)
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    let event;
+
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+        console.error(`Webhook signature verification failed: ${err.message}`);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const userId = session.metadata.userId;
+        const areaCode = session.metadata.areaCode;
+
+        try {
+            // Update user status to active in PostgreSQL
+            await pool.query('UPDATE users SET subscription_status = $1 WHERE id = $2', ['active', userId]);
+
+            // Provision Twilio Number
+            const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+            const availableNumbers = await twilioClient.availablePhoneNumbers('US')
+                .local
+                .list({ areaCode: areaCode, limit: 1 });
+
+            if (availableNumbers.length > 0) {
+                const targetNumber = availableNumbers[0].phoneNumber;
+                const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({
+                    phoneNumber: targetNumber,
+                    voiceUrl: 'https://mobilecallshield-backend.onrender.com/voice',
+                    voiceMethod: 'POST'
+                });
+
+                await pool.query(
+                    `INSERT INTO phone_numbers (user_id, phone_number, is_active) 
+                     VALUES ($1, $2, true)
+                     ON CONFLICT DO NOTHING`,
+                    [userId, purchasedNumber.phoneNumber]
+                );
+
+                console.log(`[Stripe Success] User ID ${userId} paid and was assigned Twilio number: ${purchasedNumber.phoneNumber}`);
+            }
+        } catch (err) {
+            console.error('Error provisioning number after Stripe webhook:', err);
+        }
+    }
+
+    res.json({ received: true });
+});
+
+// ----------------------------------------------------
+// 8. Start Express Server
+// ----------------------------------------------------
+app.listen(PORT, () => {
+    console.log(`Mobile Call Shield Server running on port ${PORT}`);
+});
+
+// ----------------------------------------------------
+// 8. Start Express Server
 // ----------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Mobile Call Shield Server running on port ${PORT}`);
