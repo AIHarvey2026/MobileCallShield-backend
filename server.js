@@ -517,7 +517,7 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 
         const dbPin = userResult.rows[0].guardian_code;
 
-        // Only require and check PIN if the user has set a guardian_code and is turning the shield OFF
+        // If this evaluates to true, it requires the PIN check!
         if (!isEnabled && dbPin && dbPin.trim() !== '') {
             if (pin !== dbPin) {
                 return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
@@ -527,8 +527,7 @@ app.put('/api/user/toggle-shield', async (req, res) => {
         await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
         res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
     } catch (err) {
-        console.error('Error toggling shield:', err);
-        res.status(500).json({ error: 'Server error updating shield status.' });
+        ...
     }
 });
 
