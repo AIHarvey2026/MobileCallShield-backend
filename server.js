@@ -526,8 +526,10 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 
         await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
         res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
-    } catch (err) {
-        ...
+    	} catch (err) {
+        console.error('Error toggling shield:', err);
+        res.status(500).json({ error: 'Server error updating shield status.' });
+    }
     }
 });
 
