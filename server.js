@@ -574,26 +574,28 @@ app.put('/api/user/update-pin', async (req, res) => {
 // Update Passcode
 
 app.post('/api/settings/update-passcode', async (req, res) => {
-    const { userId, newPasscode } = req.body;
+    const { userId, pin, newPasscode } = req.body;
 
-    if (!userId || !newPasscode) {
-        return res.status(400).json({ error: 'User ID and new passcode are required.' });
+    if (!userId || !pin || !newPasscode) {
+        return res.status(400).json({ error: 'User ID, PIN, and new passcode are required.' });
     }
 
     try {
+        // Verify PIN first
+        const userCheck = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        if (userCheck.rows.length === 0 || userCheck.rows[0].pin !== pin) {
+            return res.status(401).json({ error: 'Incorrect owner PIN.' });
+        }
+
+        // Update Passcode
         const result = await pool.query(
             'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
             [newPasscode, userId]
         );
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-
         res.status(200).json({
             success: true,
-            message: 'Passcode updated successfully!',
-            passcode: result.rows[0].passcode
+            message: 'Passcode updated successfully!'
         });
     } catch (err) {
         console.error('Error updating passcode:', err);
