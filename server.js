@@ -596,7 +596,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         console.error("❌ Database error during bulk save:", err);
         res.status(500).json({ error: err.message });
     }
-});
+}); 
 
 app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     const { userId, isGuardianEnabled } = req.body;
