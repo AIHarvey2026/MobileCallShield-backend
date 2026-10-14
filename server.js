@@ -594,3 +594,142 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         res.status(201).json({ success: true, message: "Contacts saved successfully" });
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/user/toggle-guardian-mode', async (req, res) => {
+    const { userId, isGuardianEnabled } = req.body;
+
+    if (userId === undefined || isGuardianEnabled === undefined) {
+        return res.status(400).json({ error: 'userId and isGuardianEnabled status are required.' });
+    }
+
+    try {
+        await pool.query(
+            'UPDATE users SET is_guardian_mode_enabled = $1 WHERE id = $2',
+            [isGuardianEnabled, userId]
+        );
+
+        res.json({
+            success: true,
+            message: `Guardian Mode updated to ${isGuardianEnabled}.`
+        });
+    } catch (err) {
+        console.error('Error updating guardian mode toggle:', err);
+        res.status(500).json({ error: 'Server error updating guardian mode status.' });
+    }
+});
+
+app.put('/api/user/toggle-shield', async (req, res) => {
+    const { userId, isEnabled, pin } = req.body;
+    try {
+        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+        const dbPin = userResult.rows[0].guardian_code;
+
+        if (!isEnabled && dbPin && dbPin.trim() !== '') {
+            if (pin !== dbPin) {
+                return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
+            }
+        }
+
+        await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
+        res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
+    } catch (err) {
+        console.error('Error toggling shield:', err);
+        res.status(500).json({ error: 'Server error updating shield status.' });
+    }
+});
+
+app.get('/api/call-logs/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(
+            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching call logs:', err);
+        res.status(500).json({ error: 'Server error fetching call logs.' });
+    }
+});
+
+app.delete('/api/call-logs/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM call_logs WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Call log not found.' });
+        }
+        res.json({ success: true, message: 'Call log deleted successfully.' });
+    } catch (err) {
+        console.error('Error deleting call log:', err);
+        res.status(500).json({ error: 'Server error deleting call log.' });
+    }
+});
+
+// Update Guardian Passcode
+app.put('/api/user/update-pin', async (req, res) => {
+    const { userId, currentPin, newPin } = req.body;
+
+    if (!userId || !currentPin || !newPin) {
+        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbPin = userResult.rows[0].guardian_code || '1234';
+        if (currentPin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
+        }
+
+        await pool.query('UPDATE users SET guardian_code = $1 WHERE id = $2', [newPin, userId]);
+        res.json({ success: true, message: 'Guardian passcode updated successfully.' });
+    } catch (err) {
+        console.error('Error updating PIN:', err);
+        res.status(500).json({ error: 'Server error updating PIN.' });
+    }
+});
+
+// Update Passcode
+app.post('/api/settings/update-passcode', async (req, res) => {
+    const { userId, pin, newPasscode } = req.body;
+
+    if (!userId || !pin || !newPasscode) {
+        return res.status(400).json({ error: 'User ID, PIN, and new passcode are required.' });
+    }
+
+    try {
+        const userCheck = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        if (userCheck.rows.length === 0 || userCheck.rows[0].pin !== pin) {
+            return res.status(401).json({ error: 'Incorrect owner PIN.' });
+        }
+
+        const result = await pool.query(
+            'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
+            [newPasscode, userId]
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Passcode updated successfully!'
+        });
+    } catch (err) {
+        console.error('Error updating passcode:', err);
+        res.status(500).json({ error: 'Server error updating passcode.' });
+    }
+});
+
+// ----------------------------------------------------
+// 7. Start Express Server
+// ----------------------------------------------------
+app.listen(PORT, () => {
+    console.log(`Mobile Call Shield Server running on port ${PORT}`);
+});
