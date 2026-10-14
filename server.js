@@ -96,22 +96,29 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         }
 
         const userPasscode = passcode || '1234';
+        
+        // Calculate 14-day free trial end date
+        const trialEnd = new Date();
+        trialEnd.setDate(trialEnd.getDate() + 14);
 
-        // Storing password as plain text directly
+        // Storing user with trial status
         const newUser = await pool.query(
-            'INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, user_name, owner_phone, email, passcode',
-            [email, phoneNumber, email, password, pin, userPasscode]
+            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, subscription_status, trial_ends_at, created_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, 'trialing', $7, NOW()) 
+             RETURNING id, user_name, owner_phone, email, passcode, subscription_status`,
+            [name || email, phoneNumber, email, password, pin, userPasscode, trialEnd]
         );
 
         res.status(201).json({
             success: true,
-            message: 'User registered successfully!',
+            message: 'User registered successfully with a 14-day free trial!',
             user: {
                 id: newUser.rows[0].id,
                 name: newUser.rows[0].user_name,
                 phoneNumber: newUser.rows[0].owner_phone,
                 email: newUser.rows[0].email,
-                passcode: newUser.rows[0].passcode
+                passcode: newUser.rows[0].passcode,
+                subscriptionStatus: newUser.rows[0].subscription_status
             }
         });
     } catch (err) {
