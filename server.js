@@ -85,6 +85,31 @@ app.get('/api/settings', async (req, res) => {
     }
 });
 
+
+//Subscription getting Posted
+app.post('/api/subscription/sync', async (req, res) => {
+    const { userId, originalTransactionId, expirationDate, isTrial } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is required.' });
+    }
+
+    try {
+        await pool.query(
+            `UPDATE users 
+             SET subscription_status = $1, 
+                 original_transaction_id = $2
+             WHERE id = $3`,
+            [isTrial ? 'trialing' : 'active', originalTransactionId, userId]
+        );
+
+        res.json({ success: true, message: 'Subscription status synced with Apple StoreKit.' });
+    } catch (err) {
+        console.error('Error syncing StoreKit transaction:', err);
+        res.status(500).json({ error: 'Server error syncing subscription.' });
+    }
+});
+
 // ----------------------------------------------------
 // 3. User Authentication Routes (Protected by authLimiter)
 // ----------------------------------------------------
