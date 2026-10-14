@@ -1,4 +1,4 @@
-const express = require('express');
+onst express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
@@ -110,28 +110,28 @@ app.post('/api/auth/register', async (req, res) => {
 
 // Login
 app.post('/api/auth/login', async (req, res) => {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
 
-    console.log(`[Login Attempt] Username/Email received: "${username}" | Password received: "${password}"`);
+    console.log(`[Login Attempt] Email received: "${email}" | Password received: "${password}"`);
 
     try {
         const result = await pool.query(
-            'SELECT * FROM users WHERE user_name = $1 OR email = $1', 
-            [username]
+            'SELECT * FROM users WHERE email = $1', 
+            [email]
         );
 
         if (result.rows.length === 0) {
-            console.log(`[Login Error] User not found in database for: "${username}"`);
+            console.log(`[Login Error] User not found in database for email: "${email}"`);
             return res.status(401).json({ error: 'Invalid credentials: User not found.' });
         }
 
         const user = result.rows[0];
-        console.log(`[Login Debug] User found! DB Password is: "${user.password}"`);
+        console.log(`[Login Debug] User found! Checking password...`);
 
         const match = (password === user.password) || await bcrypt.compare(password, user.password).catch(() => false);
 
         if (!match) {
-            console.log(`[Login Error] Password mismatch! Sent: "${password}" vs DB: "${user.password}"`);
+            console.log(`[Login Error] Password mismatch for email: "${email}"`);
             return res.status(401).json({ error: 'Invalid credentials: Password incorrect.' });
         }
 
@@ -210,10 +210,10 @@ app.post('/voice', async (req, res) => {
 
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
-            
+
             if (user.is_call_shield_enabled === false) {
                 console.log(`[Call Shield Disabled] Direct dialing owner phone: ${user.owner_phone}`);
-                
+
                 await pool.query(
                     'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
                     [user.id, req.body.From, twilioNumber, 'DIRECT_DIAL']
@@ -243,7 +243,7 @@ app.post('/voice', async (req, res) => {
     twiml.say({ 
         voice: 'Polly.Matthew-Neural' 
     }, 'We did not receive any response. Goodbye.');
-    
+
     twiml.hangup();
 
     res.type('text/xml');
@@ -264,7 +264,7 @@ app.post('/process-passphrase', async (req, res) => {
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
-        
+
         if (userResult.rows.length === 0) {
             twiml.say({ voice: 'Polly.Matthew-Neural' }, 'No active account found for this phone number.');
             twiml.hangup();
@@ -293,7 +293,7 @@ app.post('/process-passphrase', async (req, res) => {
             twiml.say({ 
                 voice: 'Polly.Matthew-Neural' 
             }, 'Passcode not recognized. If you are a doctor, pharmacy, or family member, please leave a message after the tone with your name and callback number. Press pound when finished.');
-            
+
             twiml.record({
                 action: '/save-voicemail',
                 method: 'POST',
@@ -350,7 +350,6 @@ app.post('/save-voicemail', async (req, res) => {
 // 6. Trusted Contacts & Guardian Routes
 // ----------------------------------------------------
 
-// Fetch all trusted contacts for a user
 app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -365,17 +364,16 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     }
 });
 
-// Toggle guardian status directly by contact ID
 app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
     const contactId = req.params.id;
     const { is_guardian } = req.body;
-    
+
     try {
         const result = await pool.query(
             'UPDATE trusted_contacts SET is_guardian = $1 WHERE id = $2',
             [is_guardian, contactId]
         );
-        
+
         if (result.rowCount === 0) {
             return res.status(404).json({ error: 'Contact not found.' });
         }
@@ -387,7 +385,6 @@ app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
     }
 });
 
-// Fetch only contacts marked as guardians
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -408,12 +405,11 @@ app.get('/api/guardians/:userId', async (req, res) => {
     }
 });
 
-// Delete a trusted contact by ID
 app.delete('/api/trusted-contacts/:id', async (req, res) => {
     const contactId = req.params.id;
     try {
         const result = await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [contactId]);
-        
+
         if (result.rowCount === 0) {
             return res.status(404).json({ error: 'Contact not found.' });
         }
@@ -425,7 +421,6 @@ app.delete('/api/trusted-contacts/:id', async (req, res) => {
     }
 });
 
-// Set a contact as Primary Guardian
 app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     const contactId = req.params.id;
     const { userId } = req.body;
@@ -452,11 +447,10 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     }
 });
 
-// POST /api/trusted-contacts/bulk
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         const { userId, contacts } = req.body;
-        
+
         if (!userId || !contacts || !Array.isArray(contacts)) {
             return res.status(400).json({ error: "Invalid payload format" });
         }
@@ -480,7 +474,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
-// Toggle Guardian Mode Route
 app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     const { userId, isGuardianEnabled } = req.body;
 
@@ -504,13 +497,12 @@ app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     }
 });
 
-// Toggle Call Shield Status (Requires Primary Guardian PIN verification)
 app.put('/api/user/toggle-shield', async (req, res) => {
     const { userId, isEnabled, pin } = req.body;
     try {
         const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-        
+
         const dbPin = userResult.rows[0].pin || '1234';
         if (!isEnabled && pin !== dbPin) {
             return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
@@ -524,7 +516,6 @@ app.put('/api/user/toggle-shield', async (req, res) => {
     }
 });
 
-// Fetch Call Logs for a User
 app.get('/api/call-logs/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -539,8 +530,49 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     }
 });
 
-// Delete a specific call log
 app.delete('/api/call-logs/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool
+        const result = await pool.query('DELETE FROM call_logs WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Call log not found.' });
+        }
+        res.json({ success: true, message: 'Call log deleted successfully.' });
+    } catch (err) {
+        console.error('Error deleting call log:', err);
+        res.status(500).json({ error: 'Server error deleting call log.' });
+    }
+});
+
+app.put('/api/user/update-pin', async (req, res) => {
+    const { userId, currentPin, newPin } = req.body;
+
+    if (!userId || !currentPin || !newPin) {
+        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbPin = userResult.rows[0].pin || '1234';
+        if (currentPin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
+        }
+
+        await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
+        res.json({ success: true, message: 'PIN updated successfully.' });
+    } catch (err) {
+        console.error('Error updating PIN:', err);
+        res.status(500).json({ error: 'Server error updating PIN.' });
+    }
+});
+
+// ----------------------------------------------------
+// 7. Start Express Server
+// ----------------------------------------------------
+app.listen(PORT, () => {
+    console.log(`Mobile Call Shield Server running on port ${PORT}`);
+});
