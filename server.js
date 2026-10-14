@@ -760,35 +760,26 @@ app.post('/api/settings/update-passcode', async (req, res) => {
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // Create Stripe Checkout Session (Supports Promo Codes for Family & Friends)
-app.post('/api/create-checkout-session', async (req, res) => {
-    const { userId, areaCode } = req.body;
+// Example updated checkout session route
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [
+        {
+          price: req.body.priceId, // Or your specific price ID
+          quantity: 1,
+        },
+      ],
+      success_url: 'https://mobile-call-shield.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://mobile-call-shield.onrender.com/cancel',
+    });
 
-    if (!userId || !areaCode) {
-        return res.status(400).json({ error: 'User ID and area code are required.' });
-    }
-
-    try {
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            mode: 'subscription',
-            allow_promotion_codes: true, // Enables users to type in family/friend promo codes
-            line_items: [{
-                price: process.env.STRIPE_PRICE_ID,
-                quantity: 1,
-            }],
-            metadata: {
-                userId: String(userId),
-                areaCode: areaCode
-            },
-            success_url: 'https://mobilecallshield.com/success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url: 'https://mobilecallshield.com/cancel',
-        });
-
-        res.json({ success: true, url: session.url });
-    } catch (err) {
-        console.error('Error creating Stripe session:', err);
-        res.status(500).json({ error: 'Failed to create payment session.' });
-    }
+    res.json({ url: session.url });
+  } catch (error) {
+    console.error('Error creating Stripe session:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Stripe Webhook (Processes successful payments/free promo completion & provisions Twilio numbers automatically)
