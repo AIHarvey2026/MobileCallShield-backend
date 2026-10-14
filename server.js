@@ -752,49 +752,13 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 });
 
-
-
-
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-
-// 1. Create Stripe Checkout Session
-app.post('/api/create-checkout-session', async (req, res) => {
-    const { userId, areaCode } = req.body;
-
-    if (!userId || !areaCode) {
-        return res.status(400).json({ error: 'User ID and area code are required.' });
-    }
-
-    try {
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            mode: 'subscription',
-            line_items: [{
-                price: process.env.STRIPE_PRICE_ID, // Your recurring price ID from Stripe Dashboard
-                quantity: 1,
-            }],
-            metadata: {
-                userId: String(userId),
-                areaCode: areaCode
-            },
-            success_url: 'https://mobilecallshield.com/success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url: 'https://mobilecallshield.com/cancel',
-        });
-
-        res.json({ success: true, url: session.url });
-    } catch (err) {
-        console.error('Error creating Stripe session:', err);
-        res.status(500).json({ error: 'Failed to create payment session.' });
-    }
-});
-
 // ----------------------------------------------------
 // 7. Stripe Payment & Webhook Routes
 // ----------------------------------------------------
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-// Create Stripe Checkout Session
+// Create Stripe Checkout Session (Supports Promo Codes for Family & Friends)
 app.post('/api/create-checkout-session', async (req, res) => {
     const { userId, areaCode } = req.body;
 
@@ -806,8 +770,9 @@ app.post('/api/create-checkout-session', async (req, res) => {
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
             mode: 'subscription',
+            allow_promotion_codes: true, // Enables users to type in family/friend promo codes
             line_items: [{
-                price: process.env.STRIPE_PRICE_ID, // Your recurring price ID from Stripe Dashboard
+                price: process.env.STRIPE_PRICE_ID,
                 quantity: 1,
             }],
             metadata: {
@@ -825,7 +790,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
     }
 });
 
-// Stripe Webhook (Processes successful payments & provisions Twilio numbers automatically)
+// Stripe Webhook (Processes successful payments/free promo completion & provisions Twilio numbers automatically)
 app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
@@ -843,10 +808,8 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
         const areaCode = session.metadata.areaCode;
 
         try {
-            // Update user status to active in PostgreSQL
             await pool.query('UPDATE users SET subscription_status = $1 WHERE id = $2', ['active', userId]);
 
-            // Provision Twilio Number
             const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
             const availableNumbers = await twilioClient.availablePhoneNumbers('US')
                 .local
@@ -867,7 +830,7 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
                     [userId, purchasedNumber.phoneNumber]
                 );
 
-                console.log(`[Stripe Success] User ID ${userId} paid and was assigned Twilio number: ${purchasedNumber.phoneNumber}`);
+                console.log(`[Stripe Success] User ID ${userId} completed checkout and was assigned Twilio number: ${purchasedNumber.phoneNumber}`);
             }
         } catch (err) {
             console.error('Error provisioning number after Stripe webhook:', err);
@@ -875,13 +838,6 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
     }
 
     res.json({ received: true });
-});
-
-// ----------------------------------------------------
-// 8. Start Express Server
-// ----------------------------------------------------
-app.listen(PORT, () => {
-    console.log(`Mobile Call Shield Server running on port ${PORT}`);
 });
 
 // ----------------------------------------------------
