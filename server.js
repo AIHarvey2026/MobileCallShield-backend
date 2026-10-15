@@ -362,7 +362,7 @@ app.post('/voice', async (req, res) => {
             const user = userResult.rows[0];
 
             if (user.is_call_shield_enabled === false) {
-                console.log(`[Call Shield Disabled] Direct dialing owner phone: ${user.owner_phone}`);
+                console.log(`[Call Shield Enabled] Direct dialing owner phone: ${user.owner_phone}`);
 
                 await pool.query(
                     'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
