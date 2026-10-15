@@ -816,6 +816,31 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
     res.json({ received: true });
 });
 
+// Batch endpoint for importing multiple contacts and setting Guardian status
+app.post('/api/contacts/batch-add', async (req, res) => {
+  const { userId, contacts } = req.body;
+
+  if (!userId || !Array.isArray(contacts)) {
+    return res.status(400).json({ error: 'Invalid input data: userId and contacts array required.' });
+  }
+
+  try {
+    for (const c of contacts) {
+      await pool.query( // <-- Changed from db.query to pool.query
+        `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
+         VALUES ($1, $2, $3, $4) 
+         ON CONFLICT (user_id, phone_number) 
+         DO UPDATE SET is_guardian = EXCLUDED.is_guardian, name = EXCLUDED.name`,
+        [userId, c.contactName, c.phoneNumber, c.isGuardian || false]
+      );
+    }
+    res.json({ success: true, count: contacts.length });
+  } catch (err) {
+    console.error('Batch contact insert failed:', err);
+    res.status(500).json({ error: 'Database insertion error' });
+  }
+});
+
 // ----------------------------------------------------
 // Server Listener
 // ----------------------------------------------------
