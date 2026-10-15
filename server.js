@@ -757,7 +757,9 @@ app.post('/api/settings/update-passcode', async (req, res) => {
 // 7. Stripe Payment & Webhook Routes
 // ----------------------------------------------------
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2025-03-31' // or your account's supported recent version
+});
 
 // Create Stripe Checkout Session (Supports Promo Codes for Family & Friends)
 // Example updated checkout session route
