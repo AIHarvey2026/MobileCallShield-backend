@@ -3,17 +3,16 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const twilio = require('twilio');
-const rateLimit = require('express-rate-limit'); // Added rate limiter package
+const rateLimit = require('express-rate-limit');
 const nodemailer = require('nodemailer');
-
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST, // e.g., smtp.sendgrid.net or smtp.gmail.com
+    host: process.env.EMAIL_HOST,
     port: process.env.EMAIL_PORT || 587,
-    secure: false, // true for 465, false for other ports
+    secure: false,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -42,7 +41,7 @@ app.use(cors({
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            callback(null, true); // Set to true during initial beta testing
+            callback(null, true);
         }
     },
     credentials: true
@@ -51,10 +50,9 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Rate Limiter for Authentication Routes (Protects against brute-force / bots)
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes window
-    max: 10, // Limit each IP address to 10 requests per 15-minute window
+    windowMs: 15 * 60 * 1000,
+    max: 10,
     standardHeaders: true, 
     legacyHeaders: false, 
     message: {
@@ -63,14 +61,12 @@ const authLimiter = rateLimit({
     }
 });
 
-// Health Check Endpoint for UptimeRobot / Monitoring
+// Health Check Endpoint
 app.get('/health', (req, res) => {
     res.status(200).send('Mobile Call Shield Backend is active and healthy.');
 });
 
-// ----------------------------------------------------
-// App Settings Endpoint (Logo and Title Sync)
-// ----------------------------------------------------
+// App Settings Endpoint
 app.get('/api/settings', async (req, res) => {
     try {
         res.json({
@@ -86,8 +82,7 @@ app.get('/api/settings', async (req, res) => {
     }
 });
 
-
-//Subscription getting Posted
+// Subscription Sync
 app.post('/api/subscription/sync', async (req, res) => {
     const { userId, originalTransactionId, expirationDate, isTrial } = req.body;
 
@@ -112,9 +107,8 @@ app.post('/api/subscription/sync', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 3. User Authentication Routes (Protected by authLimiter)
+// 3. User Authentication Routes
 // ----------------------------------------------------
-
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     const { name, phoneNumber, email, password, pin, passcode } = req.body;
 
@@ -134,11 +128,9 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         const userPasscode = passcode || '1234';
         
-        // Calculate 14-day free trial end date
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
-        // Storing user with trial status
         const newUser = await pool.query(
             `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, subscription_status, trial_ends_at, created_at) 
              VALUES ($1, $2, $3, $4, $5, $6, 'trialing', $7, NOW()) 
@@ -146,9 +138,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             [name || email, phoneNumber, email, password, pin, userPasscode, trialEnd]
         );
 
-        // ----------------------------------------------------
-        // Send Trial Welcome Email Inside Route Handler
-        // ----------------------------------------------------
         const formattedTrialEnd = trialEnd.toLocaleDateString('en-US', {
             weekday: 'long',
             year: 'numeric',
@@ -361,9 +350,9 @@ app.post('/voice', async (req, res) => {
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
 
-            if (user.is_call_shield_enabled === false) {
-                console.log(`[Call Shield Enabled] Direct dialing owner phone: ${user.owner_phone}`);
-
+            if (user.is_call_shield_enabled !== true) {
+                console.log(`[Call Shield Disabled] Direct dialing owner phone: ${user.owner_phone}`);
+                
                 await pool.query(
                     'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
                     [user.id, req.body.From, twilioNumber, 'DIRECT_DIAL']
@@ -373,27 +362,27 @@ app.post('/voice', async (req, res) => {
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
+
+            console.log(`[Call Shield Enabled] Starting screening for ${req.body.From}`);
+            const gather = twiml.gather({
+                input: 'speech',
+                action: '/process-passphrase',
+                method: 'POST',
+                timeout: 8,
+                speechTimeout: 'auto'
+            });
+            
+            // Updated to Joanna (Female Voice)
+            gather.say({ voice: 'Polly.Joanna-Neural' }, 'Hello! This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
+
+            res.type('text/xml');
+            return res.send(twiml.toString());
         }
     } catch (err) {
         console.error('Error checking shield status on incoming call:', err);
     }
 
-    const gather = twiml.gather({
-        input: 'speech',
-        action: '/process-passphrase',
-        method: 'POST',
-        timeout: 5,
-        speechTimeout: 'auto'
-    });
-
-    gather.say({ 
-        voice: 'Polly.Matthew-Neural' 
-    }, 'Hello! This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
-
-    twiml.say({ 
-        voice: 'Polly.Matthew-Neural' 
-    }, 'We did not receive any response. Goodbye.');
-
+    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'No active account found for this phone number. Goodbye.');
     twiml.hangup();
 
     res.type('text/xml');
@@ -416,7 +405,7 @@ app.post('/process-passphrase', async (req, res) => {
         `, [twilioNumber]);
 
         if (userResult.rows.length === 0) {
-            twiml.say({ voice: 'Polly.Matthew-Neural' }, 'No active account found for this phone number.');
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'No active account found for this phone number.');
             twiml.hangup();
             res.type('text/xml');
             return res.send(twiml.toString());
@@ -432,7 +421,7 @@ app.post('/process-passphrase', async (req, res) => {
                 [user.id, req.body.From, twilioNumber, 'PASSED_PASSCODE']
             ).catch(err => console.error('Error logging passed passcode:', err));
 
-            twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Passcode accepted. Connecting your call now.');
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Passcode accepted. Connecting your call now.');
             twiml.dial(forwardNumber);
         } else {
             await pool.query(
@@ -441,7 +430,7 @@ app.post('/process-passphrase', async (req, res) => {
             ).catch(err => console.error('Error logging voicemail redirect:', err));
 
             twiml.say({ 
-                voice: 'Polly.Matthew-Neural' 
+                voice: 'Polly.Joanna-Neural' 
             }, 'Passcode not recognized. If you are a doctor, pharmacy, or family member, please leave a message after the tone with your name and callback number. Press pound when finished.');
 
             twiml.record({
@@ -453,7 +442,7 @@ app.post('/process-passphrase', async (req, res) => {
         }
     } catch (err) {
         console.error('Database lookup error during passcode verification:', err);
-        twiml.say({ voice: 'Polly.Matthew-Neural' }, 'An internal error occurred processing your call.');
+        twiml.say({ voice: 'Polly.Joanna-Neural' }, 'An internal error occurred processing your call.');
         twiml.hangup();
     }
 
@@ -489,7 +478,7 @@ app.post('/save-voicemail', async (req, res) => {
     }
 
     const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: 'Polly.Matthew-Neural' }, 'Thank you. Your message has been saved. Goodbye.');
+    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Thank you. Your message has been saved. Goodbye.');
     twiml.hangup();
 
     res.type('text/xml');
@@ -499,7 +488,6 @@ app.post('/save-voicemail', async (req, res) => {
 // ----------------------------------------------------
 // 6. Trusted Contacts & Guardian Routes
 // ----------------------------------------------------
-
 app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -756,20 +744,17 @@ app.post('/api/settings/update-passcode', async (req, res) => {
 // ----------------------------------------------------
 // 7. Stripe Payment & Webhook Routes
 // ----------------------------------------------------
-
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2026-09-30.endive'
 });
 
-// Create Stripe Checkout Session (Supports Promo Codes for Family & Friends)
-// Example updated checkout session route
 app.post('/create-checkout-session', async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [
         {
-          price: req.body.priceId, // Or your specific price ID
+          price: req.body.priceId,
           quantity: 1,
         },
       ],
@@ -784,7 +769,6 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
-// Stripe Webhook (Processes successful payments/free promo completion & provisions Twilio numbers automatically)
 app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
@@ -823,11 +807,9 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
                      ON CONFLICT DO NOTHING`,
                     [userId, purchasedNumber.phoneNumber]
                 );
-
-                console.log(`[Stripe Success] User ID ${userId} completed checkout and was assigned Twilio number: ${purchasedNumber.phoneNumber}`);
             }
         } catch (err) {
-            console.error('Error provisioning number after Stripe webhook:', err);
+            console.error('Error provisioning number after checkout:', err);
         }
     }
 
@@ -835,8 +817,8 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
 });
 
 // ----------------------------------------------------
-// 8. Start Express Server
+// Server Listener
 // ----------------------------------------------------
 app.listen(PORT, () => {
-    console.log(`Mobile Call Shield Server running on port ${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
 });
