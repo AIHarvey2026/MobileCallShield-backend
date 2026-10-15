@@ -758,7 +758,7 @@ app.post('/api/settings/update-passcode', async (req, res) => {
 // ----------------------------------------------------
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2025-03-31' // or your account's supported recent version
+  apiVersion: '2026-09-30.endive'
 });
 
 // Create Stripe Checkout Session (Supports Promo Codes for Family & Friends)
