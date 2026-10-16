@@ -488,6 +488,7 @@ app.post('/save-voicemail', async (req, res) => {
 app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
+        console.log('[DEBUG] GET /api/trusted-contacts received userId: ', userId);
         const result = await pool.query(
             'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1', 
             [userId]
@@ -523,6 +524,7 @@ app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
+        console.log('[DEBUG] GET /api/guardians received userId: ', userId);
         const result = await pool.query(
             'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
             [userId]
@@ -543,6 +545,7 @@ app.get('/api/guardians/:userId', async (req, res) => {
 app.delete('/api/trusted-contacts/:id', async (req, res) => {
     const contactId = req.params.id;
     try {
+        console.log('[DEBUG] DELETE /api/trusted-contacts received contactId: ', contactId);
         const result = await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [contactId]);
 
         if (result.rowCount === 0) {
@@ -561,6 +564,7 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     const { userId } = req.body;
 
     try {
+        console.log(`[DEBUG] PUT /api/trusted-contacts/${contactId}/primary received userId:`, userId);
         await pool.query(
             'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
             [userId]
@@ -587,6 +591,7 @@ app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
     const { userId, contactId } = req.params;
 
     try {
+        console.log(`[DEBUG] PUT /api/guardians/${userId}/primary/${contactId}`);
         await pool.query(
             'UPDATE trusted_contacts SET is_primary = FALSE WHERE user_id = $1',
             [userId]
@@ -612,6 +617,9 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         const { userId, contacts } = req.body;
 
+        console.log(`[DEBUG] Received bulk contact sync. Incoming userId:`, userId); 
+        console.log(`[DEBUG] Number of contacts to insert:`, contacts?.length);  
+
         if (!userId || !contacts || !Array.isArray(contacts)) {
             return res.status(400).json({ error: "Invalid payload format" });
         }
@@ -628,6 +636,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             );
         }
 
+        console.log(`[DEBUG] Successfully inserted all contacts for userId: ${userId}`);
         res.status(201).json({ success: true, message: "Contacts saved successfully" });
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
@@ -831,38 +840,14 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
                     [userId, purchasedNumber.phoneNumber]
                 );
             }
-        } catch (err) {
-            console.error('Error provisioning number after checkout:', err);
+        } catch (dbErr) {
+            console.error('Error handling webhook DB update:', dbErr);
         }
     }
 
     res.json({ received: true });
 });
 
-app.post('/api/contacts/batch-add', async (req, res) => {
-  const { userId, contacts } = req.body;
-
-  if (!userId || !Array.isArray(contacts)) {
-    return res.status(400).json({ error: 'Invalid input data: userId and contacts array required.' });
-  }
-
-  try {
-    for (const c of contacts) {
-      await pool.query(
-        `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
-         VALUES ($1, $2, $3, $4) 
-         ON CONFLICT (user_id, phone_number) 
-         DO UPDATE SET is_guardian = EXCLUDED.is_guardian, name = EXCLUDED.name`,
-        [userId, c.contactName, c.phoneNumber, c.isGuardian || false]
-      );
-    }
-    res.json({ success: true, count: contacts.length });
-  } catch (err) {
-    console.error('Batch contact insert failed:', err);
-    res.status(500).json({ error: 'Database insertion error' });
-  }
-});
-
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Mobile Call Shield Backend running on port ${PORT}`);
 });
