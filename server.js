@@ -86,10 +86,6 @@ app.get('/api/settings', async (req, res) => {
 // 3. SECURITY MANAGEMENT ENDPOINTS (PIN, Passcode, Guardian Code)
 // ==========================================
 
-// ==========================================
-// UPDATE OWNER PIN (`pin` column)
-// Used in Shield Settings
-// ==========================================
 app.put('/api/user/update-owner-pin', async (req, res) => {
     const { userId, currentPin, newPin } = req.body;
 
@@ -98,7 +94,6 @@ app.put('/api/user/update-owner-pin', async (req, res) => {
     }
 
     try {
-        // FIXED: Querying the `pin` column instead of `guardian_code`
         const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) {
             return res.status(404).json({ error: 'User not found.' });
@@ -109,7 +104,6 @@ app.put('/api/user/update-owner-pin', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Incorrect current Owner PIN.' });
         }
 
-        // FIXED: Updating the `pin` column
         await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
         res.json({ success: true, message: 'Owner PIN updated successfully!' });
     } catch (err) {
@@ -118,8 +112,6 @@ app.put('/api/user/update-owner-pin', async (req, res) => {
     }
 });
 
-
-// B. UPDATE OWNER PASSCODE (`passcode` column) - Checked by Twilio for Call Screening
 app.post('/api/settings/update-passcode', async (req, res) => {
     const { userId, pin, newPasscode } = req.body;
 
@@ -150,7 +142,6 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 });
 
-// C. UPDATE GUARDIAN CODE (`guardian_code` column) - Used in Guardian Settings
 app.put('/api/user/update-pin', async (req, res) => {
     const { userId, currentPin, newPin } = req.body;
 
@@ -289,7 +280,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     }
 });
 
-// Login
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
 
@@ -489,6 +479,7 @@ app.post('/process-passphrase', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     const spokenPassphrase = (req.body.SpeechResult || '').toLowerCase().trim();
     const twilioNumber = req.body.To;
+    const callerPhone = req.body.From;
 
     console.log(`[Twilio Call] Incoming call to ${twilioNumber} | Caller said: "${spokenPassphrase}"`);
 
@@ -511,18 +502,28 @@ app.post('/process-passphrase', async (req, res) => {
         const forwardNumber = user.owner_phone;
         const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
-        if (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode)) {
+        // Check if caller's phone number matches any active trusted contact numbers
+        const trustedCheck = await pool.query(`
+            SELECT 1 
+            FROM contact_phone_numbers cpn
+            JOIN owner_contact_relationship ocr ON cpn.contact_id = ocr.contact_id
+            WHERE ocr.owner_id = $1 AND cpn.phone_number = $2 AND ocr.is_active = TRUE
+        `, [user.id, callerPhone]);
+
+        const isTrustedContact = trustedCheck.rows.length > 0;
+
+        if (isTrustedContact || (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode))) {
             await pool.query(
                 'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
-                [user.id, req.body.From, twilioNumber, 'PASSED_PASSCODE']
-            ).catch(err => console.error('Error logging passed passcode:', err));
+                [user.id, callerPhone, twilioNumber, isTrustedContact ? 'PASSED_TRUSTED_CONTACT' : 'PASSED_PASSCODE']
+            ).catch(err => console.error('Error logging passed call:', err));
 
-            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Passcode accepted. Connecting your call now.');
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Connecting your call now.');
             twiml.dial(forwardNumber);
         } else {
             await pool.query(
                 'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
-                [user.id, req.body.From, twilioNumber, 'SENT_TO_VOICEMAIL']
+                [user.id, callerPhone, twilioNumber, 'SENT_TO_VOICEMAIL']
             ).catch(err => console.error('Error logging voicemail redirect:', err));
 
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Passcode not recognized. If you are a doctor, pharmacy, or family member, please leave a message after the tone with your name and callback number. Press pound when finished.');
@@ -580,15 +581,19 @@ app.post('/save-voicemail', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 9. Trusted Contacts & Guardian Routes
+// 9. Normalized Trusted Contacts & Guardian Routes
 // ----------------------------------------------------
 app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        const result = await pool.query(
-            'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1', 
-            [userId]
-        );
+        const result = await pool.query(`
+            SELECT c.contact_id AS id, ocr.owner_id AS user_id, c.contact_name AS name, 
+                   cpn.phone_number, ocr.is_guardian, ocr.is_primary
+            FROM contacts c
+            JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
+            JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
+            WHERE ocr.owner_id = $1 AND ocr.is_active = TRUE
+        `, [userId]);
         res.json(result.rows);
     } catch (err) {
         console.error('Error fetching trusted contacts:', err);
@@ -598,16 +603,16 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
 
 app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
     const contactId = req.params.id;
-    const { is_guardian } = req.body;
+    const { is_guardian, userId } = req.body;
 
     try {
         const result = await pool.query(
-            'UPDATE trusted_contacts SET is_guardian = $1 WHERE id = $2',
-            [is_guardian, contactId]
+            'UPDATE owner_contact_relationship SET is_guardian = $1 WHERE contact_id = $2 AND owner_id = $3',
+            [is_guardian, contactId, userId]
         );
 
         if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Contact not found.' });
+            return res.status(404).json({ error: 'Contact relationship not found.' });
         }
 
         res.json({ success: true, message: 'Guardian status updated successfully.' });
@@ -620,10 +625,14 @@ app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        const result = await pool.query(
-            'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
-            [userId]
-        );
+        const result = await pool.query(`
+            SELECT c.contact_id AS id, c.contact_name AS name, cpn.phone_number, ocr.is_guardian, ocr.is_primary
+            FROM contacts c
+            JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
+            JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
+            WHERE ocr.owner_id = $1 AND ocr.is_guardian = TRUE AND ocr.is_active = TRUE
+        `, [userId]);
+        
         const formatted = result.rows.map(row => ({
             id: row.id,
             guardian_name: row.name,
@@ -639,43 +648,21 @@ app.get('/api/guardians/:userId', async (req, res) => {
 
 app.delete('/api/trusted-contacts/:id', async (req, res) => {
     const contactId = req.params.id;
+    const { userId } = req.query;
     try {
-        const result = await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [contactId]);
-
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Contact not found.' });
-        }
-
-        res.json({ success: true, message: 'Contact deleted successfully.' });
-    } catch (err) {
-        console.error('Error deleting trusted contact:', err);
-        res.status(500).json({ error: 'Server error deleting contact.' });
-    }
-});
-
-app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
-    const contactId = req.params.id;
-    const { userId } = req.body;
-
-    try {
-        await pool.query(
-            'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
-            [userId]
-        );
-
         const result = await pool.query(
-            'UPDATE trusted_contacts SET is_primary = true, is_guardian = true WHERE id = $1 AND user_id = $2',
+            'UPDATE owner_contact_relationship SET is_active = FALSE WHERE contact_id = $1 AND owner_id = $2',
             [contactId, userId]
         );
 
         if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Contact not found.' });
+            return res.status(404).json({ error: 'Contact relationship not found.' });
         }
 
-        res.json({ success: true, message: 'Primary Guardian updated successfully.' });
+        res.json({ success: true, message: 'Contact relationship deactivated successfully.' });
     } catch (err) {
-        console.error('Error setting primary guardian:', err);
-        res.status(500).json({ error: 'Server error updating primary guardian.' });
+        console.error('Error deleting trusted contact:', err);
+        res.status(500).json({ error: 'Server error deleting contact.' });
     }
 });
 
@@ -684,12 +671,12 @@ app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
 
     try {
         await pool.query(
-            'UPDATE trusted_contacts SET is_primary = FALSE WHERE user_id = $1',
+            'UPDATE owner_contact_relationship SET is_primary = FALSE WHERE owner_id = $1',
             [userId]
         );
 
         const result = await pool.query(
-            'UPDATE trusted_contacts SET is_primary = TRUE, is_guardian = TRUE WHERE id = $1 AND user_id = $2 RETURNING *',
+            'UPDATE owner_contact_relationship SET is_primary = TRUE, is_guardian = TRUE WHERE contact_id = $1 AND owner_id = $2 RETURNING *',
             [contactId, userId]
         );
 
@@ -704,30 +691,58 @@ app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
     }
 });
 
+// Normalized Bulk Insert Endpoint
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
-    try {
-        const { userId, contacts } = req.body;
+    const { userId, contacts } = req.body;
 
-        if (!userId || !contacts || !Array.isArray(contacts)) {
-            return res.status(400).json({ error: "Invalid payload format" });
-        }
+    if (!userId || !contacts || !Array.isArray(contacts)) {
+        return res.status(400).json({ error: "Invalid payload format" });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
         for (const contact of contacts) {
+            const contactName = contact.name || 'Unknown';
+            const phoneNumbers = Array.isArray(contact.phone_numbers) 
+                ? contact.phone_numbers 
+                : (contact.phone_number ? [contact.phone_number] : []);
             const isGuardian = contact.is_guardian || false;
 
-            await pool.query(
-                `INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian) 
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (user_id, phone_number) 
-                 DO UPDATE SET name = EXCLUDED.name, is_guardian = EXCLUDED.is_guardian`,
-                [userId, contact.name, contact.phone_number, isGuardian]
+            if (phoneNumbers.length === 0) continue;
+
+            const contactResult = await client.query(
+                'INSERT INTO contacts (contact_name) VALUES ($1) RETURNING contact_id',
+                [contactName]
             );
+            const contactId = contactResult.rows[0].contact_id;
+
+            await client.query(
+                `INSERT INTO owner_contact_relationship (owner_id, contact_id, is_guardian, is_active) 
+                 VALUES ($1, $2, $3, TRUE) 
+                 ON CONFLICT (owner_id, contact_id) DO UPDATE SET is_active = TRUE, is_guardian = EXCLUDED.is_guardian`,
+                [userId, contactId, isGuardian]
+            );
+
+            for (const number of phoneNumbers) {
+                await client.query(
+                    `INSERT INTO contact_phone_numbers (contact_id, phone_number) 
+                     VALUES ($1, $2) 
+                     ON CONFLICT (phone_number) DO NOTHING`,
+                    [contactId, number]
+                );
+            }
         }
 
-        res.status(201).json({ success: true, message: "Contacts saved successfully" });
+        await client.query('COMMIT');
+        res.status(201).json({ success: true, message: "Contacts saved successfully via normalized model" });
     } catch (err) {
-        console.error("❌ Database error during bulk save:", err);
+        await client.query('ROLLBACK');
+        console.error("❌ Database error during normalized bulk save:", err);
         res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
     }
 }); 
 
@@ -762,10 +777,10 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 
         const dbPin = userResult.rows[0].guardian_code;
 
-        const guardiansResult = await pool.query(
-            'SELECT * FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
-            [userId]
-        );
+        const guardiansResult = await pool.query(`
+            SELECT 1 FROM owner_contact_relationship ocr
+            WHERE ocr.owner_id = $1 AND ocr.is_guardian = true AND ocr.is_active = true
+        `, [userId]);
         const hasGuardians = guardiansResult.rows.length > 0;
 
         if (!isEnabled && hasGuardians && dbPin && dbPin.trim() !== '') {
