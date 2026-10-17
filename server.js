@@ -9,6 +9,14 @@ const nodemailer = require('nodemailer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ----------------------------------------------------
+// 1. Database Connection (PostgreSQL on Render)
+// ----------------------------------------------------
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
 const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: process.env.EMAIL_PORT || 587,
@@ -17,14 +25,6 @@ const transporter = nodemailer.createTransport({
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     }
-});
-
-// ----------------------------------------------------
-// 1. Database Connection (PostgreSQL on Render)
-// ----------------------------------------------------
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
 // ----------------------------------------------------
@@ -82,7 +82,98 @@ app.get('/api/settings', async (req, res) => {
     }
 });
 
-// Subscription Sync
+// ==========================================
+// 3. SECURITY MANAGEMENT ENDPOINTS (PIN, Passcode, Guardian Code)
+// ==========================================
+
+// A. UPDATE OWNER PIN (`pin` column) - Used in Shield Settings
+app.put('/api/user/update-owner-pin', async (req, res) => {
+    const { userId, currentPin, newPin } = req.body;
+
+    if (!userId || !currentPin || !newPin) {
+        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbPin = userResult.rows[0].pin || '1234';
+        if (currentPin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect current Owner PIN.' });
+        }
+
+        await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
+        res.json({ success: true, message: 'Owner PIN updated successfully!' });
+    } catch (err) {
+        console.error('Error updating Owner PIN:', err);
+        res.status(500).json({ error: 'Server error updating Owner PIN.' });
+    }
+});
+
+// B. UPDATE OWNER PASSCODE (`passcode` column) - Checked by Twilio for Call Screening
+app.post('/api/settings/update-passcode', async (req, res) => {
+    const { userId, pin, newPasscode } = req.body;
+
+    if (!userId || !pin || !newPasscode) {
+        return res.status(400).json({ error: 'User ID, PIN, and new passcode phrase are required.' });
+    }
+
+    try {
+        const userCheck = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
+        if (userCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const currentDbPin = userCheck.rows[0].pin || '1234';
+        if (currentDbPin !== pin) {
+            return res.status(401).json({ error: 'Incorrect Owner PIN.' });
+        }
+
+        await pool.query('UPDATE users SET passcode = $1 WHERE id = $2', [newPasscode, userId]);
+
+        res.status(200).json({
+            success: true,
+            message: 'Screening Passcode Phrase updated successfully!'
+        });
+    } catch (err) {
+        console.error('Error updating passcode:', err);
+        res.status(500).json({ error: 'Server error updating screening passcode.' });
+    }
+});
+
+// C. UPDATE GUARDIAN CODE (`guardian_code` column) - Used in Guardian Settings
+app.put('/api/user/update-pin', async (req, res) => {
+    const { userId, currentPin, newPin } = req.body;
+
+    if (!userId || !currentPin || !newPin) {
+        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbPin = userResult.rows[0].guardian_code || '1234';
+        if (currentPin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect current Guardian Code.' });
+        }
+
+        await pool.query('UPDATE users SET guardian_code = $1 WHERE id = $2', [newPin, userId]);
+        res.json({ success: true, message: 'Guardian Code updated successfully!' });
+    } catch (err) {
+        console.error('Error updating Guardian Code:', err);
+        res.status(500).json({ error: 'Server error updating Guardian Code.' });
+    }
+});
+
+// ----------------------------------------------------
+// 4. Subscription Sync
+// ----------------------------------------------------
 app.post('/api/subscription/sync', async (req, res) => {
     const { userId, originalTransactionId, expirationDate, isTrial } = req.body;
 
@@ -107,7 +198,7 @@ app.post('/api/subscription/sync', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 3. User Authentication Routes
+// 5. User Authentication Routes
 // ----------------------------------------------------
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     const { name, phoneNumber, email, password, pin, passcode } = req.body;
@@ -237,7 +328,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 4. Beta Tester Portal Error Logging Endpoint
+// 6. Beta Tester Portal Error Logging Endpoint
 // ----------------------------------------------------
 app.post('/api/tester-feedback', async (req, res) => {
     const { testerName, device, errorDetails } = req.body;
@@ -276,7 +367,7 @@ app.post('/api/tester-feedback', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// Subscription & Twilio Number Provisioning Endpoint
+// 7. Subscription & Twilio Number Provisioning Endpoint
 // ----------------------------------------------------
 app.post('/api/subscription/activate', async (req, res) => {
     const { userId, areaCode } = req.body;
@@ -331,7 +422,7 @@ app.post('/api/subscription/activate', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 5. Twilio Voice Webhooks (Incoming Call Screening)
+// 8. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
@@ -483,12 +574,11 @@ app.post('/save-voicemail', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 6. Trusted Contacts & Guardian Routes
+// 9. Trusted Contacts & Guardian Routes
 // ----------------------------------------------------
 app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        console.log('[DEBUG] GET /api/trusted-contacts received userId: ', userId);
         const result = await pool.query(
             'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1', 
             [userId]
@@ -524,7 +614,6 @@ app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        console.log('[DEBUG] GET /api/guardians received userId: ', userId);
         const result = await pool.query(
             'SELECT id, user_id, name, phone_number, is_guardian, is_primary FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
             [userId]
@@ -545,7 +634,6 @@ app.get('/api/guardians/:userId', async (req, res) => {
 app.delete('/api/trusted-contacts/:id', async (req, res) => {
     const contactId = req.params.id;
     try {
-        console.log('[DEBUG] DELETE /api/trusted-contacts received contactId: ', contactId);
         const result = await pool.query('DELETE FROM trusted_contacts WHERE id = $1', [contactId]);
 
         if (result.rowCount === 0) {
@@ -564,7 +652,6 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     const { userId } = req.body;
 
     try {
-        console.log(`[DEBUG] PUT /api/trusted-contacts/${contactId}/primary received userId:`, userId);
         await pool.query(
             'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
             [userId]
@@ -586,12 +673,10 @@ app.put('/api/trusted-contacts/:id/primary', async (req, res) => {
     }
 });
 
-// Primary Guardian PUT Route matching Android app call
 app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
     const { userId, contactId } = req.params;
 
     try {
-        console.log(`[DEBUG] PUT /api/guardians/${userId}/primary/${contactId}`);
         await pool.query(
             'UPDATE trusted_contacts SET is_primary = FALSE WHERE user_id = $1',
             [userId]
@@ -617,9 +702,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         const { userId, contacts } = req.body;
 
-        console.log(`[DEBUG] Received bulk contact sync. Incoming userId:`, userId); 
-        console.log(`[DEBUG] Number of contacts to insert:`, contacts?.length);  
-
         if (!userId || !contacts || !Array.isArray(contacts)) {
             return res.status(400).json({ error: "Invalid payload format" });
         }
@@ -636,7 +718,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             );
         }
 
-        console.log(`[DEBUG] Successfully inserted all contacts for userId: ${userId}`);
         res.status(201).json({ success: true, message: "Contacts saved successfully" });
     } catch (err) {
         console.error("❌ Database error during bulk save:", err);
@@ -675,14 +756,12 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 
         const dbPin = userResult.rows[0].guardian_code;
 
-        // Check if the user has any active/trusted guardians
         const guardiansResult = await pool.query(
             'SELECT * FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
             [userId]
         );
         const hasGuardians = guardiansResult.rows.length > 0;
 
-        // Only enforce the PIN if turning OFF, a PIN exists, AND there are active guardians!
         if (!isEnabled && hasGuardians && dbPin && dbPin.trim() !== '') {
             if (pin !== dbPin) {
                 return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
@@ -725,139 +804,9 @@ app.delete('/api/call-logs/:id', async (req, res) => {
     }
 });
 
-// Update Guardian Passcode
-app.put('/api/user/update-pin', async (req, res) => {
-    const { userId, currentPin, newPin } = req.body;
-
-    if (!userId || !currentPin || !newPin) {
-        return res.status(400).json({ error: 'User ID, current PIN, and new PIN are required.' });
-    }
-
-    try {
-        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-
-        const dbPin = userResult.rows[0].guardian_code || '1234';
-        if (currentPin !== dbPin) {
-            return res.status(401).json({ success: false, error: 'Incorrect current PIN.' });
-        }
-
-        await pool.query('UPDATE users SET guardian_code = $1 WHERE id = $2', [newPin, userId]);
-        res.json({ success: true, message: 'Guardian passcode updated successfully.' });
-    } catch (err) {
-        console.error('Error updating PIN:', err);
-        res.status(500).json({ error: 'Server error updating PIN.' });
-    }
-});
-
-// Update Passcode
-app.post('/api/settings/update-passcode', async (req, res) => {
-    const { userId, pin, newPasscode } = req.body;
-
-    if (!userId || !pin || !newPasscode) {
-        return res.status(400).json({ error: 'User ID, PIN, and new passcode are required.' });
-    }
-
-    try {
-        const userCheck = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
-        if (userCheck.rows.length === 0 || userCheck.rows[0].pin !== pin) {
-            return res.status(401).json({ error: 'Incorrect owner PIN.' });
-        }
-
-        const result = await pool.query(
-            'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
-            [newPasscode, userId]
-        );
-
-        res.status(200).json({
-            success: true,
-            message: 'Passcode updated successfully!'
-        });
-    } catch (err) {
-        console.error('Error updating passcode:', err);
-        res.status(500).json({ error: 'Server error updating passcode.' });
-    }
-});
-
 // ----------------------------------------------------
-// 7. Stripe Payment & Webhook Routes
+// Start Server
 // ----------------------------------------------------
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2026-09-30.endive'
-});
-
-app.post('/create-checkout-session', async (req, res) => {
-  try {
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [
-        {
-          price: req.body.priceId,
-          quantity: 1,
-        },
-      ],
-      success_url: 'https://mobile-call-shield.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
-      cancel_url: 'https://mobile-call-shield.onrender.com/cancel',
-    });
-
-    res.json({ url: session.url });
-  } catch (error) {
-    console.error('Error creating Stripe session:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    const sig = req.headers['stripe-signature'];
-    let event;
-
-    try {
-        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-    } catch (err) {
-        console.error(`Webhook signature verification failed: ${err.message}`);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    if (event.type === 'checkout.session.completed') {
-        const session = event.data.object;
-        const userId = session.metadata.userId;
-        const areaCode = session.metadata.areaCode;
-
-        try {
-            await pool.query('UPDATE users SET subscription_status = $1 WHERE id = $2', ['active', userId]);
-
-            const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-            const availableNumbers = await twilioClient.availablePhoneNumbers('US')
-                .local
-                .list({ areaCode: areaCode, limit: 1 });
-
-            if (availableNumbers.length > 0) {
-                const targetNumber = availableNumbers[0].phoneNumber;
-                const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({
-                    phoneNumber: targetNumber,
-                    voiceUrl: 'https://mobile-call-shield.onrender.com/voice',
-                    voiceMethod: 'POST'
-                });
-
-                await pool.query(
-                    `INSERT INTO phone_numbers (user_id, phone_number, is_active) 
-                     VALUES ($1, $2, true)
-                     ON CONFLICT DO NOTHING`,
-                    [userId, purchasedNumber.phoneNumber]
-                );
-            }
-        } catch (dbErr) {
-            console.error('Error handling webhook DB update:', dbErr);
-        }
-    }
-
-    res.json({ received: true });
-});
-
-
-
 app.listen(PORT, () => {
-    console.log(`Mobile Call Shield Backend running on port ${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
 });
