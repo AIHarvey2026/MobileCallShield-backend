@@ -675,7 +675,15 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 
         const dbPin = userResult.rows[0].guardian_code;
 
-        if (!isEnabled && dbPin && dbPin.trim() !== '') {
+        // Check if the user has any active/trusted guardians
+        const guardiansResult = await pool.query(
+            'SELECT * FROM trusted_contacts WHERE user_id = $1 AND is_guardian = true', 
+            [userId]
+        );
+        const hasGuardians = guardiansResult.rows.length > 0;
+
+        // Only enforce the PIN if turning OFF, a PIN exists, AND there are active guardians!
+        if (!isEnabled && hasGuardians && dbPin && dbPin.trim() !== '') {
             if (pin !== dbPin) {
                 return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
             }
