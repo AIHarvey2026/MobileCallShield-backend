@@ -86,7 +86,10 @@ app.get('/api/settings', async (req, res) => {
 // 3. SECURITY MANAGEMENT ENDPOINTS (PIN, Passcode, Guardian Code)
 // ==========================================
 
-// A. UPDATE OWNER PIN (`pin` column) - Used in Shield Settings
+// ==========================================
+// UPDATE OWNER PIN (`pin` column)
+// Used in Shield Settings
+// ==========================================
 app.put('/api/user/update-owner-pin', async (req, res) => {
     const { userId, currentPin, newPin } = req.body;
 
@@ -95,6 +98,7 @@ app.put('/api/user/update-owner-pin', async (req, res) => {
     }
 
     try {
+        // FIXED: Querying the `pin` column instead of `guardian_code`
         const userResult = await pool.query('SELECT pin FROM users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) {
             return res.status(404).json({ error: 'User not found.' });
@@ -105,6 +109,7 @@ app.put('/api/user/update-owner-pin', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Incorrect current Owner PIN.' });
         }
 
+        // FIXED: Updating the `pin` column
         await pool.query('UPDATE users SET pin = $1 WHERE id = $2', [newPin, userId]);
         res.json({ success: true, message: 'Owner PIN updated successfully!' });
     } catch (err) {
@@ -112,6 +117,7 @@ app.put('/api/user/update-owner-pin', async (req, res) => {
         res.status(500).json({ error: 'Server error updating Owner PIN.' });
     }
 });
+
 
 // B. UPDATE OWNER PASSCODE (`passcode` column) - Checked by Twilio for Call Screening
 app.post('/api/settings/update-passcode', async (req, res) => {
