@@ -590,9 +590,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
             SELECT c.contact_id AS id,
                    ocr.owner_id AS user_id,
                    c.contact_name AS name,
-                   cpn.phone_number,
-                   ocr.is_trusted,
-                   ocr.is_primary
+                   cpn.phone_number
             FROM contacts c
             JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
             JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
