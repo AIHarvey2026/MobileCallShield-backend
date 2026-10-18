@@ -694,7 +694,7 @@ app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
     }
 });
 
-// Normalized Bulk Insert Endpoint
+// Normalized Bulk Insert Endpoint (Cleaned of is_guardian references)
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     const { userId, contacts } = req.body;
 
@@ -738,17 +738,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         }
 
         await client.query('COMMIT');
-        res.status(200).json({ success: true, message: "Contacts saved successfully" });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error("Database error during normalized bulk save:", error);
-        res.status(500).json({ error: "Internal server error" });
-    } finally {
-        client.release();
-    }
-});
-        await client.query('COMMIT');
-        res.status(201).json({ success: true, message: "Contacts saved successfully via normalized model" });
+        res.status(200).json({ success: true, message: "Contacts saved successfully via normalized model" });
     } catch (err) {
         await client.query('ROLLBACK');
         console.error("❌ Database error during normalized bulk save:", err);
@@ -823,23 +813,6 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     }
 });
 
-app.delete('/api/call-logs/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query('DELETE FROM call_logs WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Call log not found.' });
-        }
-        res.json({ success: true, message: 'Call log deleted successfully.' });
-    } catch (err) {
-        console.error('Error deleting call log:', err);
-        res.status(500).json({ error: 'Server error deleting call log.' });
-    }
-});
-
-// ----------------------------------------------------
-// Start Server
-// ----------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
