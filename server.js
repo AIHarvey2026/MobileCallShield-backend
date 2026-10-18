@@ -590,9 +590,9 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
             SELECT c.contact_id AS id,
                    ocr.owner_id AS user_id,
                    c.contact_name AS name,
-                   ocr.is_active,
-                   ocr.is_guardian,
-                   ocr.is_primary,
+                   COALESCE(ocr.is_active, true) AS is_active,
+                   COALESCE(ocr.is_guardian, false) AS is_guardian,
+                   COALESCE(ocr.is_primary, false) AS is_primary,
                    COALESCE(
                        json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL), 
                        '[]'
@@ -607,11 +607,10 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
         res.json(result.rows);
     } catch (err) {
         console.error('Error fetching trusted contacts:', err);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Server error: ' + err.message });
     }
 });
 
-// Endpoint for fetching all contacts (active and inactive) for the sheet view
 app.get('/api/all-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -619,9 +618,9 @@ app.get('/api/all-contacts/:userId', async (req, res) => {
             SELECT c.contact_id AS id,
                    ocr.owner_id AS user_id,
                    c.contact_name AS name,
-                   ocr.is_active,
-                   ocr.is_guardian,
-                   ocr.is_primary,
+                   COALESCE(ocr.is_active, true) AS is_active,
+                   COALESCE(ocr.is_guardian, false) AS is_guardian,
+                   COALESCE(ocr.is_primary, false) AS is_primary,
                    COALESCE(
                        json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL), 
                        '[]'
@@ -636,7 +635,7 @@ app.get('/api/all-contacts/:userId', async (req, res) => {
         res.json(result.rows);
     } catch (err) {
         console.error('Error fetching all contacts:', err);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Server error: ' + err.message });
     }
 });
 
@@ -820,34 +819,6 @@ app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     } catch (err) {
         console.error('Error updating guardian mode toggle:', err);
         res.status(500).json({ error: 'Server error updating guardian mode status.' });
-    }
-});
-
-app.put('/api/user/toggle-shield', async (req, res) => {
-    const { userId, isEnabled, pin } = req.body;
-    try {
-        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
-        const dbPin = userResult.rows[0].guardian_code;
-
-        const guardiansResult = await pool.query(`
-            SELECT 1 FROM owner_contact_relationship ocr
-            WHERE ocr.owner_id = $1 AND ocr.is_guardian = true AND ocr.is_active = true
-        `, [userId]);
-        const hasGuardians = guardiansResult.rows.length > 0;
-
-        if (!isEnabled && hasGuardians && dbPin && dbPin.trim() !== '') {
-            if (pin !== dbPin) {
-                return res.status(401).json({ success: false, error: 'Incorrect Guardian Passcode.' });
-            }
-        }
-
-        await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
-        res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
-    } catch (err) {
-        console.error('Error toggling shield:', err);
-        res.status(500).json({ error: 'Server error toggling call shield.' });
     }
 });
 
