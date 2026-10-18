@@ -452,14 +452,19 @@ app.post('/voice', async (req, res) => {
 
             console.log(`[Call Shield Enabled] Starting screening for ${req.body.From}`);
             const gather = twiml.gather({
-                input: 'speech',
+                input: 'speech dtmf',
+                numDigits: 4,
                 action: '/process-passphrase',
                 method: 'POST',
-                timeout: 8,
+                timeout: 5,
                 speechTimeout: 'auto'
             });
             
             gather.say({ voice: 'Polly.Joanna-Neural' }, 'Hello! This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
+
+            // FALLBACK / TIMEOUT: If they stay silent or enter nothing before timeout
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive a response. Goodbye.');
+            twiml.hangup();
 
             res.type('text/xml');
             return res.send(twiml.toString());
@@ -781,52 +786,28 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             }
 
             for (const number of phoneNumbers) {
-                await client.query(
-                    `INSERT INTO contact_phone_numbers (contact_id, phone_number) 
-                     VALUES ($1, $2) 
-                     ON CONFLICT (phone_number) DO NOTHING`,
-                    [contactId, number]
-                );
+                await client.query(`
+                    INSERT INTO contact_phone_numbers (contact_id, phone_number) 
+                    VALUES ($1, $2)
+                    ON CONFLICT DO NOTHING
+                `, [contactId, number]);
             }
         }
 
         await client.query('COMMIT');
-        res.status(200).json({ success: true, message: "Contacts saved successfully via normalized model" });
+        res.status(201).json({ success: true, message: 'Contacts synced successfully.' });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("❌ Database error during normalized bulk save:", err);
-        res.status(500).json({ error: err.message });
+        console.error('Error in bulk contact insert:', err);
+        res.status(500).json({ error: 'Server error during contact sync.' });
     } finally {
         client.release();
     }
 });
 
-app.put('/api/user/toggle-guardian-mode', async (req, res) => {
-    const { userId, isGuardianEnabled } = req.body;
-
-    if (userId === undefined || isGuardianEnabled === undefined) {
-        return res.status(400).json({ error: 'userId and isGuardianEnabled status are required.' });
-    }
-
-    try {
-        await pool.query(
-            'UPDATE users SET is_guardian_mode_enabled = $1 WHERE id = $2',
-            [isGuardianEnabled, userId]
-        );
-
-        res.json({
-            success: true,
-            message: `Guardian Mode updated to ${isGuardianEnabled}.`
-        });
-    } catch (err) {
-        console.error('Error updating guardian mode toggle:', err);
-        res.status(500).json({ error: 'Server error updating guardian mode status.' });
-    }
-});
-
 // ----------------------------------------------------
-// Start Server
+// Server Listen
 // ----------------------------------------------------
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
