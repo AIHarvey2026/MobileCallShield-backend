@@ -706,6 +706,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // ---> REPLACE YOUR OLD LOOP WITH THIS NEW LOGIC <---
         for (const contact of contacts) {
             const contactName = contact.name || 'Unknown';
             const phoneNumbers = Array.isArray(contact.phone_numbers) 
@@ -714,18 +715,34 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
 
             if (phoneNumbers.length === 0) continue;
 
-            const contactResult = await client.query(
-                'INSERT INTO contacts (contact_name) VALUES ($1) RETURNING contact_id',
-                [contactName]
-            );
-            const contactId = contactResult.rows[0].contact_id;
+            let contactId;
+            const existingContactQuery = await client.query(`
+                SELECT c.contact_id 
+                FROM contacts c
+                JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
+                WHERE ocr.owner_id = $1 AND c.contact_name = $2
+            `, [userId, contactName]);
 
-            await client.query(
-                `INSERT INTO owner_contact_relationship (owner_id, contact_id, is_active) 
-                 VALUES ($1, $2, TRUE) 
-                 ON CONFLICT (owner_id, contact_id) DO UPDATE SET is_active = TRUE`,
-                [userId, contactId]
-            );
+            if (existingContactQuery.rows.length > 0) {
+                contactId = existingContactQuery.rows[0].contact_id;
+
+                await client.query(`
+                    UPDATE owner_contact_relationship 
+                    SET is_active = TRUE 
+                    WHERE owner_id = $1 AND contact_id = $2
+                `, [userId, contactId]);
+            } else {
+                const contactResult = await client.query(
+                    'INSERT INTO contacts (contact_name) VALUES ($1) RETURNING contact_id',
+                    [contactName]
+                );
+                contactId = contactResult.rows[0].contact_id;
+
+                await client.query(`
+                    INSERT INTO owner_contact_relationship (owner_id, contact_id, is_active) 
+                    VALUES ($1, $2, TRUE)
+                `, [userId, contactId]);
+            }
 
             for (const number of phoneNumbers) {
                 await client.query(
@@ -736,6 +753,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                 );
             }
         }
+        // ---> END OF LOOP <---
 
         await client.query('COMMIT');
         res.status(200).json({ success: true, message: "Contacts saved successfully via normalized model" });
@@ -746,8 +764,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     } finally {
         client.release();
     }
-}); 
-
+});
 app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     const { userId, isGuardianEnabled } = req.body;
 
