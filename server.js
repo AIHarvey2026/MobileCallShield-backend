@@ -600,7 +600,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
             FROM contacts c
             JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
             LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
-            WHERE ocr.owner_id = $1
+            WHERE ocr.owner_id = $1 AND COALESCE(ocr.is_active, true) = TRUE
             GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active, ocr.is_guardian, ocr.is_primary
             ORDER BY c.contact_name ASC
         `, [userId]);
@@ -611,6 +611,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
         res.status(500).json({ error: 'Server error: ' + err.message });
     }
 });
+
 app.get('/api/all-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -628,8 +629,9 @@ app.get('/api/all-contacts/:userId', async (req, res) => {
             FROM contacts c
             JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
             LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
-            WHERE ocr.owner_id = $1 AND COALESCE(ocr.is_active, true) = TRUE
+            WHERE ocr.owner_id = $1
             GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active, ocr.is_guardian, ocr.is_primary
+            ORDER BY c.contact_name ASC
         `, [userId]);
        
         res.json(result.rows);
