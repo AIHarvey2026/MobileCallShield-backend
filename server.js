@@ -590,11 +590,16 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
             SELECT c.contact_id AS id,
                    ocr.owner_id AS user_id,
                    c.contact_name AS name,
-                   cpn.phone_number
+                   ocr.is_active,
+                   COALESCE(
+                       json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL), 
+                       '[]'
+                   ) AS phone_numbers
             FROM contacts c
             JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
-            JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
+            LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
             WHERE ocr.owner_id = $1 AND ocr.is_active = TRUE
+            GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active
         `, [userId]);
        
         res.json(result.rows);
