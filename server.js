@@ -609,6 +609,33 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     }
 });
 
+// New endpoint for fetching all contacts (active and inactive) for the sheet view
+app.get('/api/all-contacts/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(`
+            SELECT c.contact_id AS id,
+                   ocr.owner_id AS user_id,
+                   c.contact_name AS name,
+                   ocr.is_active,
+                   COALESCE(
+                       json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL), 
+                       '[]'
+                   ) AS phone_numbers
+            FROM contacts c
+            JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
+            LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
+            WHERE ocr.owner_id = $1
+            GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active
+        `, [userId]);
+       
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching all contacts:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
     const contactId = req.params.id;
     const { is_guardian, userId } = req.body;
@@ -699,7 +726,7 @@ app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
     }
 });
 
-// Normalized Bulk Insert Endpoint (Cleaned of is_guardian references)
+// Normalized Bulk Insert Endpoint
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     const { userId, contacts } = req.body;
 
@@ -711,7 +738,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // ---> REPLACE YOUR OLD LOOP WITH THIS NEW LOGIC <---
         for (const contact of contacts) {
             const contactName = contact.name || 'Unknown';
             const phoneNumbers = Array.isArray(contact.phone_numbers) 
@@ -758,7 +784,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                 );
             }
         }
-        // ---> END OF LOOP <---
 
         await client.query('COMMIT');
         res.status(200).json({ success: true, message: "Contacts saved successfully via normalized model" });
@@ -770,6 +795,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         client.release();
     }
 });
+
 app.put('/api/user/toggle-guardian-mode', async (req, res) => {
     const { userId, isGuardianEnabled } = req.body;
 
@@ -817,24 +843,13 @@ app.put('/api/user/toggle-shield', async (req, res) => {
         res.json({ success: true, message: `Call Shield updated to ${isEnabled}` });
     } catch (err) {
         console.error('Error toggling shield:', err);
-        res.status(500).json({ error: 'Server error updating shield status.' });
+        res.status(500).json({ error: 'Server error toggling call shield.' });
     }
 });
 
-app.get('/api/call-logs/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const result = await pool.query(
-            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-            [userId]
-        );
-        res.json(result.rows);
-    } catch (err) {
-        console.error('Error fetching call logs:', err);
-        res.status(500).json({ error: 'Server error fetching call logs.' });
-    }
-});
-
+// ----------------------------------------------------
+// Start Server
+// ----------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
