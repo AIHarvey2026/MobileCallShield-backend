@@ -204,13 +204,17 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         return res.status(400).json({ error: 'Phone number, email, password, and PIN are required.' });
     }
 
+    const client = await pool.connect();
     try {
-        const existingUser = await pool.query(
+        await client.query('BEGIN');
+
+        const existingUser = await client.query(
             'SELECT * FROM users WHERE owner_phone = $1 OR email = $2', 
             [phoneNumber, email]
         );
 
         if (existingUser.rows.length > 0) {
+            await client.query('ROLLBACK');
             return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
 
@@ -219,12 +223,41 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
-        const newUser = await pool.query(
+        const newUser = await client.query(
             `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, subscription_status, trial_ends_at, created_at) 
              VALUES ($1, $2, $3, $4, $5, $6, 'trialing', $7, NOW()) 
              RETURNING id, user_name, owner_phone, email, passcode, subscription_status`,
             [name || email, phoneNumber, email, password, pin, userPasscode, trialEnd]
         );
+
+        const newUserId = newUser.rows[0].id;
+
+        // Grab the next available unassigned/inactive phone number from the local database pool
+        const availablePhoneQuery = await client.query(
+            `SELECT phone_id, phone_number FROM phone_numbers 
+             WHERE is_active = false OR user_id IS NULL 
+             ORDER BY phone_id ASC 
+             LIMIT 1 FOR UPDATE`
+        );
+
+        let assignedPhoneNumber = null;
+
+        if (availablePhoneQuery.rows.length > 0) {
+            const phoneRow = availablePhoneQuery.rows[0];
+            assignedPhoneNumber = phoneRow.phone_number;
+
+            await client.query(
+                `UPDATE phone_numbers 
+                 SET user_id = $1, is_active = true 
+                 WHERE phone_id = $2`,
+                [newUserId, phoneRow.phone_id]
+            );
+            console.log(`[Local Pool Assignment] Assigned pre-existing number ${assignedPhoneNumber} to User ID ${newUserId}`);
+        } else {
+            console.log(`[Local Pool Warning] No inactive phone numbers available in the pool for User ID ${newUserId}`);
+        }
+
+        await client.query('COMMIT');
 
         const formattedTrialEnd = trialEnd.toLocaleDateString('en-US', {
             weekday: 'long',
@@ -264,22 +297,28 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: 'User registered successfully with a 14-day free trial!',
+            message: 'User registered successfully with a local phone number assigned!',
             user: {
-                id: newUser.rows[0].id,
+                id: newUserId,
                 name: newUser.rows[0].user_name,
                 phoneNumber: newUser.rows[0].owner_phone,
+                assignedTwilioNumber: assignedPhoneNumber,
                 email: newUser.rows[0].email,
                 passcode: newUser.rows[0].passcode,
                 subscriptionStatus: newUser.rows[0].subscription_status
             }
         });
     } catch (err) {
-        console.error('Error during registration:', err);
+        await client.query('ROLLBACK');
+        console.error('Error during registration with local number pool assignment:', err);
         res.status(500).json({ error: 'Server error creating user account.' });
+    } finally {
+        client.release();
     }
 });
 
+
+//  Post - Login
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
 
