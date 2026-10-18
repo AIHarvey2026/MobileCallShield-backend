@@ -711,7 +711,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             const phoneNumbers = Array.isArray(contact.phone_numbers) 
                 ? contact.phone_numbers 
                 : (contact.phone_number ? [contact.phone_number] : []);
-            const isGuardian = contact.is_guardian || false;
 
             if (phoneNumbers.length === 0) continue;
 
@@ -722,10 +721,10 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             const contactId = contactResult.rows[0].contact_id;
 
             await client.query(
-                `INSERT INTO owner_contact_relationship (owner_id, contact_id, is_guardian, is_active) 
-                 VALUES ($1, $2, $3, TRUE) 
-                 ON CONFLICT (owner_id, contact_id) DO UPDATE SET is_active = TRUE, is_guardian = EXCLUDED.is_guardian`,
-                [userId, contactId, isGuardian]
+                `INSERT INTO owner_contact_relationship (owner_id, contact_id, is_active) 
+                 VALUES ($1, $2, TRUE) 
+                 ON CONFLICT (owner_id, contact_id) DO UPDATE SET is_active = TRUE`,
+                [userId, contactId]
             );
 
             for (const number of phoneNumbers) {
@@ -738,6 +737,16 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
             }
         }
 
+        await client.query('COMMIT');
+        res.status(200).json({ success: true, message: "Contacts saved successfully" });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Database error during normalized bulk save:", error);
+        res.status(500).json({ error: "Internal server error" });
+    } finally {
+        client.release();
+    }
+});
         await client.query('COMMIT');
         res.status(201).json({ success: true, message: "Contacts saved successfully via normalized model" });
     } catch (err) {
