@@ -844,6 +844,38 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
+// Stripe Checkout Session Endpoint
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const { areaCode, userId } = req.body;
+
+    // Create Stripe Checkout Session for a subscription
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'subscription',
+      line_items: [
+        {
+          price: process.env.STRIPE_PRICE_ID, // Make sure this price ID is set in your Render environment variables
+          quantity: 1,
+        },
+      ],
+      // Store the user's area code and ID in metadata so you can retrieve it later after payment
+      metadata: {
+        areaCode: areaCode || '',
+        userId: userId || '',
+      },
+      success_url: 'https://your-backend.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://your-backend.onrender.com/cancel',
+    });
+
+    // Return the checkout URL back to your Android app
+    res.json({ url: session.url });
+  } catch (error) {
+    console.error('Error creating Stripe session:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
