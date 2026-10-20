@@ -232,11 +232,11 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         const newUserId = newUser.rows[0].id;
 
-        // Grab the next available unassigned/inactive phone number from the local database pool
+        // Grab the next available unassigned/inactive phone number from the twilio_numbers pool
         const availablePhoneQuery = await client.query(
-            `SELECT phone_id, phone_number FROM phone_numbers 
+            `SELECT id, phone_number FROM twilio_numbers 
              WHERE is_active = false OR user_id IS NULL 
-             ORDER BY phone_id ASC 
+             ORDER BY id ASC 
              LIMIT 1 FOR UPDATE`
         );
 
@@ -247,14 +247,14 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             assignedPhoneNumber = phoneRow.phone_number;
 
             await client.query(
-                `UPDATE phone_numbers 
+                `UPDATE twilio_numbers 
                  SET user_id = $1, is_active = true 
-                 WHERE phone_id = $2`,
-                [newUserId, phoneRow.phone_id]
+                 WHERE id = $2`,
+                [newUserId, phoneRow.id]
             );
-            console.log(`[Local Pool Assignment] Assigned pre-existing number ${assignedPhoneNumber} to User ID ${newUserId}`);
+            console.log(`[Twilio Pool Assignment] Assigned pre-existing number ${assignedPhoneNumber} to User ID ${newUserId}`);
         } else {
-            console.log(`[Local Pool Warning] No inactive phone numbers available in the pool for User ID ${newUserId}`);
+            console.log(`[Twilio Pool Warning] No inactive phone numbers available in the pool for User ID ${newUserId}`);
         }
 
         await client.query('COMMIT');
@@ -297,7 +297,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: 'User registered successfully with a local phone number assigned!',
+            message: 'User registered successfully with a Twilio phone number assigned!',
             user: {
                 id: newUserId,
                 name: newUser.rows[0].user_name,
@@ -310,7 +310,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('Error during registration with local number pool assignment:', err);
+        console.error('Error during registration with Twilio pool assignment:', err);
         res.status(500).json({ error: 'Server error creating user account.' });
     } finally {
         client.release();
@@ -344,7 +344,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             console.log(`[Login Error] Password mismatch for email: "${email}"`);
             return res.status(401).json({ error: 'Invalid credentials: Password incorrect.' });
         }
-console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
+        
+        console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
         res.status(200).json({
             success: true,
             message: 'Login successful!',
@@ -353,7 +354,8 @@ console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
                 name: user.user_name,
                 phoneNumber: user.owner_phone,
                 email: user.email,
-                isAdmin: user.is_admin || false // Added this so Android can detect admin accounts
+                subscriptionStatus: user.subscription_status || 'trialing',
+                isAdmin: user.is_admin || false
             }
         });
     } catch (err) {
@@ -436,7 +438,7 @@ app.post('/api/subscription/activate', async (req, res) => {
         );
 
         await pool.query(
-            `INSERT INTO phone_numbers (user_id, phone_number, is_active) 
+            `INSERT INTO twilio_numbers (user_id, phone_number, is_active) 
              VALUES ($1, $2, true)
              ON CONFLICT DO NOTHING`,
             [userId, purchasedNumber.phoneNumber]
@@ -468,7 +470,7 @@ app.post('/voice', async (req, res) => {
     try {
         const userResult = await pool.query(`
             SELECT u.id, u.owner_phone, u.is_call_shield_enabled 
-            FROM phone_numbers pn
+            FROM twilio_numbers pn
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
@@ -501,7 +503,6 @@ app.post('/voice', async (req, res) => {
             
             gather.say({ voice: 'Polly.Joanna-Neural' }, 'Hello! This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
 
-            // FALLBACK / TIMEOUT: If they stay silent or enter nothing before timeout
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive a response. Goodbye.');
             twiml.hangup();
 
@@ -530,7 +531,7 @@ app.post('/process-passphrase', async (req, res) => {
     try {
         const userResult = await pool.query(`
             SELECT u.passcode, u.owner_phone, u.id 
-            FROM phone_numbers pn
+            FROM twilio_numbers pn
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
@@ -546,7 +547,6 @@ app.post('/process-passphrase', async (req, res) => {
         const forwardNumber = user.owner_phone;
         const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
-        // Check if caller's phone number matches any active trusted contact numbers
         const trustedCheck = await pool.query(`
             SELECT 1 
             FROM contact_phone_numbers cpn
@@ -598,7 +598,7 @@ app.post('/save-voicemail', async (req, res) => {
 
     try {
         const userResult = await pool.query(`
-            SELECT u.id FROM phone_numbers pn
+            SELECT u.id FROM twilio_numbers pn
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [calledNumber]);
@@ -775,7 +775,6 @@ app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
     }
 });
 
-// Normalized Bulk Insert Endpoint
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     const { userId, contacts } = req.body;
 
@@ -850,31 +849,28 @@ app.post('/create-checkout-session', async (req, res) => {
     const { areaCode, userId } = req.body;
     const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-    // Create Stripe Checkout Session for a subscription
     const session = await stripe.checkout.sessions.create({
-  mode: 'subscription',
-  line_items: [
-    {
-      price: process.env.STRIPE_PRICE_ID,
-      quantity: 1,
-    },
-  ],
-  // Add 14-day free trial configuration
-  subscription_data: {
-    trial_period_days: 14,
-  },
-  // Disable Managed Payments for this session to bypass tax code requirements
-  managed_payments: {
-    enabled: false,
-  },
-  metadata: {
-    areaCode: areaCode || '',
-    userId: userId || '',
-  },
-  success_url: 'https://mobilecallshield-backend.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
-  cancel_url: 'https://mobilecallshield-backend.onrender.com/cancel',
-});
-    // Return the checkout URL back to your Android app
+      mode: 'subscription',
+      line_items: [
+        {
+          price: process.env.STRIPE_PRICE_ID,
+          quantity: 1,
+        },
+      ],
+      subscription_data: {
+        trial_period_days: 14,
+      },
+      managed_payments: {
+        enabled: false,
+      },
+      metadata: {
+        areaCode: areaCode || '',
+        userId: userId || '',
+      },
+      success_url: 'https://mobilecallshield-backend.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: 'https://mobilecallshield-backend.onrender.com/cancel',
+    });
+
     res.json({ url: session.url });
   } catch (error) {
     console.error('Error creating Stripe session:', error.message);
