@@ -848,6 +848,7 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
 app.post('/create-checkout-session', async (req, res) => {
   try {
     const { areaCode, userId } = req.body;
+    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
     // Create Stripe Checkout Session for a subscription
     const session = await stripe.checkout.sessions.create({
