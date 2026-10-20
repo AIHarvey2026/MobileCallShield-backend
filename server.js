@@ -344,8 +344,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             console.log(`[Login Error] Password mismatch for email: "${email}"`);
             return res.status(401).json({ error: 'Invalid credentials: Password incorrect.' });
         }
-
-        console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
+console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
         res.status(200).json({
             success: true,
             message: 'Login successful!',
@@ -353,7 +352,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
                 id: user.id,
                 name: user.user_name,
                 phoneNumber: user.owner_phone,
-                email: user.email
+                email: user.email,
+                isAdmin: user.is_admin || false // Added this so Android can detect admin accounts
             }
         });
     } catch (err) {
