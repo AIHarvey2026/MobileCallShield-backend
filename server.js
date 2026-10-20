@@ -852,22 +852,24 @@ app.post('/create-checkout-session', async (req, res) => {
 
     // Create Stripe Checkout Session for a subscription
     const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [
-        {
-          price: process.env.STRIPE_PRICE_ID, // Make sure this price ID is set in your Render environment variables
-          quantity: 1,
-        },
-      ],
-      // Store the user's area code and ID in metadata so you can retrieve it later after payment
-      metadata: {
-        areaCode: areaCode || '',
-        userId: userId || '',
-      },
-      success_url: 'https://mobilecallshield-backend.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
-      cancel_url: 'https://mobilecallshield-backend.onrender.com/cancel',
-    });
-
+  mode: 'subscription',
+  line_items: [
+    {
+      price: process.env.STRIPE_PRICE_ID,
+      quantity: 1,
+    },
+  ],
+  // Disable Managed Payments for this session to bypass tax code requirements
+  managed_payments: {
+    enabled: false,
+  },
+  metadata: {
+    areaCode: areaCode || '',
+    userId: userId || '',
+  },
+  success_url: 'https://mobilecallshield-backend.onrender.com/success?session_id={CHECKOUT_SESSION_ID}',
+  cancel_url: 'https://mobilecallshield-backend.onrender.com/cancel',
+});
     // Return the checkout URL back to your Android app
     res.json({ url: session.url });
   } catch (error) {
