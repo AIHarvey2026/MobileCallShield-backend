@@ -859,6 +859,10 @@ app.post('/create-checkout-session', async (req, res) => {
       quantity: 1,
     },
   ],
+  // Add 14-day free trial configuration
+  subscription_data: {
+    trial_period_days: 14,
+  },
   // Disable Managed Payments for this session to bypass tax code requirements
   managed_payments: {
     enabled: false,
