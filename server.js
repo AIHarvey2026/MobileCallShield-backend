@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const twilio = require('twilio');
 const rateLimit = require('express-rate-limit');
 const nodemailer = require('nodemailer');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,13 +57,51 @@ app.use(express.urlencoded({ extended: true }));
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
-    standardHeaders: true, 
-    legacyHeaders: false, 
+    standardHeaders: true,
+    legacyHeaders: false,
     message: {
         success: false,
         error: "Too many authentication attempts from this device. Please try again after 15 minutes."
     }
 });
+
+// ----------------------------------------------------
+// Login tokens (JWT). Render > Environment: JWT_SECRET = long random text.
+// ----------------------------------------------------
+function signToken(user) {
+    if (!process.env.JWT_SECRET) {
+        console.error('[Auth] JWT_SECRET is not set; no login token issued.');
+        return null;
+    }
+    return jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+}
+
+// Requires a valid token. The user id comes from the token, never from the request.
+// Emergency switch: set REQUIRE_AUTH=false on Render to go back to the old behavior
+// (userId taken from the request) if an app that sends no token stops working.
+function authRequired(req, res, next) {
+    if (process.env.REQUIRE_AUTH === 'false') {
+        req.userId = req.query.userId || (req.body && req.body.userId);
+        return req.userId ? next() : res.status(400).json({ error: 'User ID is required.' });
+    }
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    try {
+        req.userId = jwt.verify(token, process.env.JWT_SECRET).id;
+        next();
+    } catch (e) {
+        res.status(401).json({ error: 'Please sign in again.' });
+    }
+}
+
+function toE164(raw) {
+    const text = String(raw || '').trim();
+    const digits = text.replace(/\D/g, '');
+    if (digits.length === 10) return '+1' + digits;
+    if (digits.length === 11 && digits[0] === '1') return '+' + digits;
+    if (text.startsWith('+') && digits.length >= 8 && digits.length <= 15) return '+' + digits;
+    return null;
+}
 
 // Health Check Endpoint
 app.get('/health', (req, res) => {
@@ -183,8 +222,8 @@ app.post('/api/subscription/sync', async (req, res) => {
 
     try {
         await pool.query(
-            `UPDATE users 
-             SET subscription_status = $1, 
+            `UPDATE users
+             SET subscription_status = $1,
                  original_transaction_id = $2
              WHERE id = $3`,
             [isTrial ? 'trialing' : 'active', originalTransactionId, userId]
@@ -203,17 +242,20 @@ app.post('/api/subscription/sync', async (req, res) => {
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     const { name, phoneNumber, email, password, pin, passcode } = req.body;
 
-    if (!phoneNumber || !password || !email || !pin) {
-        return res.status(400).json({ error: 'Phone number, email, password, and PIN are required.' });
+    if (!password || !email || !pin) {
+        return res.status(400).json({ error: 'Email, password, and PIN are required.' });
     }
+
+    // Website sign-ups send a placeholder phone number; the real one is saved later in setup.
+    const realPhone = (phoneNumber && phoneNumber !== '+10000000000') ? phoneNumber : null;
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
         const existingUser = await client.query(
-            'SELECT * FROM users WHERE owner_phone = $1 OR email = $2', 
-            [phoneNumber, email]
+            'SELECT id FROM users WHERE ($1::text IS NOT NULL AND owner_phone = $1) OR email = $2',
+            [realPhone, email]
         );
 
         if (existingUser.rows.length > 0) {
@@ -222,24 +264,25 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         }
 
         const userPasscode = passcode || '1234';
-        
+        const passwordHash = await bcrypt.hash(String(password), 10);
+
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
         const newUser = await client.query(
-            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, subscription_status, trial_ends_at, created_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, 'trialing', $7, NOW()) 
+            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, subscription_status, trial_ends_at, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'trialing', $7, NOW())
              RETURNING id, user_name, owner_phone, email, passcode, subscription_status`,
-            [name || email, phoneNumber, email, password, pin, userPasscode, trialEnd]
+            [name || email, realPhone, email, passwordHash, pin, userPasscode, trialEnd]
         );
 
         const newUserId = newUser.rows[0].id;
 
         // Grab the next available unassigned/inactive phone number from the twilio_numbers pool
         const availablePhoneQuery = await client.query(
-            `SELECT id, phone_number FROM twilio_numbers 
-             WHERE is_active = false OR user_id IS NULL 
-             ORDER BY id ASC 
+            `SELECT id, phone_number FROM twilio_numbers
+             WHERE is_active = false OR user_id IS NULL
+             ORDER BY id ASC
              LIMIT 1 FOR UPDATE`
         );
 
@@ -250,8 +293,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             assignedPhoneNumber = phoneRow.phone_number;
 
             await client.query(
-                `UPDATE twilio_numbers 
-                 SET user_id = $1, is_active = true 
+                `UPDATE twilio_numbers
+                 SET user_id = $1, is_active = true
                  WHERE id = $2`,
                 [newUserId, phoneRow.id]
             );
@@ -277,14 +320,14 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
                     <h2 style="color: #2563eb; margin-top: 0;">Welcome to Senior Scam Shield, ${name || 'Friend'}!</h2>
                     <p>Your account has been successfully created, and your <strong>14-day free trial</strong> is now active.</p>
-                    
+
                     <div style="background-color: #f8fafc; padding: 15px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #2563eb;">
                         <p style="margin: 0; font-size: 15px;"><strong>Trial End Date:</strong> ${formattedTrialEnd}</p>
                         <p style="margin: 5px 0 0 0; font-size: 13px; color: #64748b;">You will have full access to call screening, trusted contacts, and voicemail playback during your trial without any charges.</p>
                     </div>
 
                     <p>If you have any questions or need assistance setting up your phone forwarding, feel free to reply directly to this email or visit our support portal.</p>
-                    
+
                     <p style="margin-top: 30px; font-size: 14px; color: #64748b;">Stay protected,<br><strong>The Senior Scam Shield Team</strong></p>
                 </div>
             `
@@ -301,6 +344,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'User registered successfully with a Twilio phone number assigned!',
+            token: signToken({ id: newUserId }),
             user: {
                 id: newUserId,
                 name: newUser.rows[0].user_name,
@@ -325,11 +369,11 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
 
-    console.log(`[Login Attempt] Email received: "${email}" | Password received: "${password}"`);
+    console.log(`[Login Attempt] Email received: "${email}"`);
 
     try {
         const result = await pool.query(
-            'SELECT * FROM users WHERE email = $1', 
+            'SELECT * FROM users WHERE email = $1',
             [email]
         );
 
@@ -341,17 +385,27 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const user = result.rows[0];
         console.log(`[Login Debug] User found! Checking password...`);
 
-        const match = (password === user.password) || await bcrypt.compare(password, user.password).catch(() => false);
+        const isPlain = password === user.password;
+        const match = isPlain || await bcrypt.compare(String(password || ''), String(user.password || '')).catch(() => false);
 
         if (!match) {
             console.log(`[Login Error] Password mismatch for email: "${email}"`);
             return res.status(401).json({ error: 'Invalid credentials: Password incorrect.' });
         }
-        
+
         console.log(`[Login Success] User ID ${user.id} logged in successfully.`);
+
+        // Older accounts have a readable password: scramble it now that we know it.
+        if (isPlain) {
+            bcrypt.hash(String(password), 10)
+                .then(h => pool.query('UPDATE users SET password = $1 WHERE id = $2', [h, user.id]))
+                .catch(e => console.error('Password upgrade skipped:', e.message));
+        }
+
         res.status(200).json({
             success: true,
             message: 'Login successful!',
+            token: signToken(user),
             user: {
                 id: user.id,
                 name: user.user_name,
@@ -367,52 +421,35 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
-// Endpoint to complete setup / update forwarding number and PIN
-app.post('/api/setup', async (req, res) => {
-  const userId = req.query.userId || req.body.userId;
-  const { phone_number, owner_phone, passphrase, pin } = req.body;
+// Endpoint to complete setup: forwarding number, caller passphrase, owner PIN
+app.post('/api/setup', authRequired, async (req, res) => {
+    const { owner_phone, phone_number, passphrase, pin } = req.body || {};
+    const phone = toE164(owner_phone || phone_number);
+    const phrase = String(passphrase || '').trim();
 
-  // Accept either owner_phone or phone_number field name
-  const rawPhone = owner_phone || phone_number;
-
-  if (!userId) {
-    return res.status(400).json({ error: 'User ID is required.' });
-  }
-
-  try {
-    // Format phone number to E.164 if 10 digits (e.g. 2819670169 -> +12819670169)
-    let formattedPhone = rawPhone ? rawPhone.replace(/\D/g, '') : '';
-    if (formattedPhone.length === 10) {
-      formattedPhone = '+1' + formattedPhone;
-    } else if (rawPhone && rawPhone.startsWith('+')) {
-      formattedPhone = rawPhone;
+    if (!phone) return res.status(400).json({ error: 'Please enter a full mobile number with area code.' });
+    if (phrase.length < 4) return res.status(400).json({ error: 'The passphrase needs at least 4 characters.' });
+    if (!/^\d{4,6}$/.test(String(pin || ''))) return res.status(400).json({ error: 'The PIN must be 4 to 6 digits.' });
+    if (String(pin) === '1234' || /^(\d)\1+$/.test(String(pin)) || phrase === '1234') {
+        return res.status(400).json({ error: 'That is too easy to guess. Please choose something different.' });
     }
 
-    const query = `
-      UPDATE public.users
-      SET owner_phone = COALESCE($1, owner_phone),
-          passphrase = COALESCE($2, passphrase),
-          pin = COALESCE($3, pin)
-      WHERE id = $4
-      RETURNING id, user_name, email, owner_phone, passphrase, pin;
-    `;
-
-    const values = [formattedPhone || null, passphrase || null, pin || null, userId];
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User record not found.' });
+    try {
+        // The caller passphrase is stored in "passcode", which is what the phone screening checks.
+        const result = await pool.query(
+            `UPDATE public.users
+                SET owner_phone = $1, passcode = $2, pin = $3, setup_complete = true
+              WHERE id = $4
+              RETURNING id, email, owner_phone`,
+            [phone, phrase, String(pin), req.userId]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'User record not found.' });
+        res.json({ success: true, message: 'Setup completed successfully!', user: result.rows[0] });
+    } catch (err) {
+        if (err.code === '23505') return res.status(409).json({ error: 'That phone number is already used by another account.' });
+        console.error('Error during setup endpoint:', err);
+        res.status(500).json({ error: 'Database update failed.' });
     }
-
-    res.json({
-      success: true,
-      message: 'Setup completed successfully!',
-      user: result.rows[0]
-    });
-  } catch (err) {
-    console.error('Error during setup endpoint:', err);
-    res.status(500).json({ error: 'Database update failed.' });
-  }
 });
 
 // ----------------------------------------------------
@@ -489,7 +526,7 @@ app.post('/api/subscription/activate', async (req, res) => {
         );
 
         await pool.query(
-            `INSERT INTO twilio_numbers (user_id, phone_number, is_active) 
+            `INSERT INTO twilio_numbers (user_id, phone_number, is_active)
              VALUES ($1, $2, true)
              ON CONFLICT DO NOTHING`,
             [userId, purchasedNumber.phoneNumber]
@@ -510,42 +547,38 @@ app.post('/api/subscription/activate', async (req, res) => {
 });
 
 // Get current user details and assigned Twilio number
-app.get('/api/me', async (req, res) => {
-  const userId = req.query.userId;
+app.get('/api/me', authRequired, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT u.id, u.user_name, u.email, u.owner_phone,
+                   COALESCE(u.setup_complete, false) AS setup_complete,
+                   t.phone_number AS assigned_twilio_number
+            FROM public.users u
+            LEFT JOIN public.twilio_numbers t ON t.user_id = u.id
+            WHERE u.id = $1
+            ORDER BY t.id ASC
+            LIMIT 1
+        `, [req.userId]);
 
-  if (!userId) {
-    return res.status(400).json({ error: 'User ID is required.' });
-  }
+        if (result.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
 
-  try {
-    const query = `
-      SELECT u.id, u.user_name, u.email, u.owner_phone, t.phone_number AS assigned_twilio_number
-      FROM public.users u
-      LEFT JOIN public.twilio_numbers t ON t.user_id = u.id
-      WHERE u.id = $1
-    `;
-    const result = await pool.query(query, [userId]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found.' });
+        const user = result.rows[0];
+        res.json({
+            success: true,
+            user: {
+                id: user.id,
+                name: user.user_name,
+                email: user.email,
+                phoneNumber: user.owner_phone,
+                ownerPhone: user.owner_phone,
+                assignedTwilioNumber: user.assigned_twilio_number || null,
+                setupComplete: user.setup_complete
+            }
+        });
+    } catch (err) {
+        console.error('Error fetching user details:', err);
+        res.status(500).json({ error: 'Server error fetching user details.' });
     }
-
-    const user = result.rows[0];
-
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        name: user.user_name,
-        email: user.email,
-        phoneNumber: user.owner_phone,
-        assignedTwilioNumber: user.assigned_twilio_number || null
-      }
-    });
-  } catch (err) {
-    console.error('Error fetching user details:', err);
-    res.status(500).json({ error: 'Server error fetching user details.' });
-  }
 });
 
 // ----------------------------------------------------
@@ -559,7 +592,7 @@ app.post('/voice', async (req, res) => {
 
     try {
         const userResult = await pool.query(`
-            SELECT u.id, u.owner_phone, u.is_call_shield_enabled 
+            SELECT u.id, u.owner_phone, u.is_call_shield_enabled
             FROM twilio_numbers pn
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
@@ -570,7 +603,7 @@ app.post('/voice', async (req, res) => {
 
             if (user.is_call_shield_enabled !== true) {
                 console.log(`[Call Shield Disabled] Direct dialing owner phone: ${user.owner_phone}`);
-                
+
                 await pool.query(
                     'INSERT INTO call_logs (user_id, caller_phone, called_phone, status) VALUES ($1, $2, $3, $4)',
                     [user.id, req.body.From, twilioNumber, 'DIRECT_DIAL']
@@ -590,7 +623,7 @@ app.post('/voice', async (req, res) => {
                 timeout: 5,
                 speechTimeout: 'auto'
             });
-            
+
             gather.say({ voice: 'Polly.Joanna-Neural' }, 'Hello! This number is protected by Mobile Call Shield. Please state your name or passcode after the tone.');
 
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive a response. Goodbye.');
@@ -620,7 +653,7 @@ app.post('/process-passphrase', async (req, res) => {
 
     try {
         const userResult = await pool.query(`
-            SELECT u.passcode, u.owner_phone, u.id 
+            SELECT u.passcode, u.owner_phone, u.id
             FROM twilio_numbers pn
             JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
@@ -638,7 +671,7 @@ app.post('/process-passphrase', async (req, res) => {
         const userPasscode = (user.passcode || '1234').toLowerCase().trim();
 
         const trustedCheck = await pool.query(`
-            SELECT 1 
+            SELECT 1
             FROM contact_phone_numbers cpn
             JOIN owner_contact_relationship ocr ON cpn.contact_id = ocr.contact_id
             WHERE ocr.owner_id = $1 AND cpn.phone_number = $2 AND ocr.is_active = TRUE
@@ -696,9 +729,9 @@ app.post('/save-voicemail', async (req, res) => {
         if (userResult.rows.length > 0) {
             const userId = userResult.rows[0].id;
             await pool.query(`
-                UPDATE call_logs 
-                SET voicemail_url = $1 
-                WHERE user_id = $2 AND caller_phone = $3 AND voicemail_url IS NULL 
+                UPDATE call_logs
+                SET voicemail_url = $1
+                WHERE user_id = $2 AND caller_phone = $3 AND voicemail_url IS NULL
                 AND created_at >= NOW() - INTERVAL '10 minutes'
             `, [`${recordingUrl}.mp3`, userId, callerNumber]);
         }
@@ -738,7 +771,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
             GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active, ocr.is_guardian, ocr.is_primary
             ORDER BY c.contact_name ASC
         `, [userId]);
-       
+
         res.json(result.rows);
     } catch (err) {
         console.error('Error fetching trusted contacts:', err);
@@ -757,7 +790,7 @@ app.get('/api/all-contacts/:userId', async (req, res) => {
                    COALESCE(ocr.is_guardian, false) AS is_guardian,
                    COALESCE(ocr.is_primary, false) AS is_primary,
                    COALESCE(
-                       json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL), 
+                       json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL),
                        '[]'
                    ) AS phone_numbers
             FROM contacts c
@@ -767,7 +800,7 @@ app.get('/api/all-contacts/:userId', async (req, res) => {
             GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active, ocr.is_guardian, ocr.is_primary
             ORDER BY c.contact_name ASC
         `, [userId]);
-       
+
         res.json(result.rows);
     } catch (err) {
         console.error('Error fetching all contacts:', err);
@@ -806,7 +839,7 @@ app.get('/api/guardians/:userId', async (req, res) => {
             JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
             WHERE ocr.owner_id = $1 AND ocr.is_guardian = TRUE AND ocr.is_active = TRUE
         `, [userId]);
-        
+
         const formatted = result.rows.map(row => ({
             id: row.id,
             guardian_name: row.name,
@@ -878,15 +911,15 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
 
         for (const contact of contacts) {
             const contactName = contact.name || 'Unknown';
-            const phoneNumbers = Array.isArray(contact.phone_numbers) 
-                ? contact.phone_numbers 
+            const phoneNumbers = Array.isArray(contact.phone_numbers)
+                ? contact.phone_numbers
                 : (contact.phone_number ? [contact.phone_number] : []);
 
             if (phoneNumbers.length === 0) continue;
 
             let contactId;
             const existingContactQuery = await client.query(`
-                SELECT c.contact_id 
+                SELECT c.contact_id
                 FROM contacts c
                 JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
                 WHERE ocr.owner_id = $1 AND c.contact_name = $2
@@ -896,8 +929,8 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                 contactId = existingContactQuery.rows[0].contact_id;
 
                 await client.query(`
-                    UPDATE owner_contact_relationship 
-                    SET is_active = TRUE 
+                    UPDATE owner_contact_relationship
+                    SET is_active = TRUE
                     WHERE owner_id = $1 AND contact_id = $2
                 `, [userId, contactId]);
             } else {
@@ -908,14 +941,14 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                 contactId = contactResult.rows[0].contact_id;
 
                 await client.query(`
-                    INSERT INTO owner_contact_relationship (owner_id, contact_id, is_active) 
+                    INSERT INTO owner_contact_relationship (owner_id, contact_id, is_active)
                     VALUES ($1, $2, TRUE)
                 `, [userId, contactId]);
             }
 
             for (const number of phoneNumbers) {
                 await client.query(`
-                    INSERT INTO contact_phone_numbers (contact_id, phone_number) 
+                    INSERT INTO contact_phone_numbers (contact_id, phone_number)
                     VALUES ($1, $2)
                     ON CONFLICT DO NOTHING
                 `, [contactId, number]);
