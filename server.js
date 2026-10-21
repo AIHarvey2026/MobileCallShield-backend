@@ -9,6 +9,9 @@ const nodemailer = require('nodemailer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust reverse proxy (Render) for express-rate-limit
+app.set('trust proxy', 1);
+
 // ----------------------------------------------------
 // 1. Database Connection (PostgreSQL on Render)
 // ----------------------------------------------------
