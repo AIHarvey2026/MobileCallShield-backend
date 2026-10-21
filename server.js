@@ -367,6 +367,54 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
+// Endpoint to complete setup / update forwarding number and PIN
+app.post('/api/setup', async (req, res) => {
+  const userId = req.query.userId || req.body.userId;
+  const { phone_number, owner_phone, passphrase, pin } = req.body;
+
+  // Accept either owner_phone or phone_number field name
+  const rawPhone = owner_phone || phone_number;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required.' });
+  }
+
+  try {
+    // Format phone number to E.164 if 10 digits (e.g. 2819670169 -> +12819670169)
+    let formattedPhone = rawPhone ? rawPhone.replace(/\D/g, '') : '';
+    if (formattedPhone.length === 10) {
+      formattedPhone = '+1' + formattedPhone;
+    } else if (rawPhone && rawPhone.startsWith('+')) {
+      formattedPhone = rawPhone;
+    }
+
+    const query = `
+      UPDATE public.users
+      SET owner_phone = COALESCE($1, owner_phone),
+          passphrase = COALESCE($2, passphrase),
+          pin = COALESCE($3, pin)
+      WHERE id = $4
+      RETURNING id, user_name, email, owner_phone, passphrase, pin;
+    `;
+
+    const values = [formattedPhone || null, passphrase || null, pin || null, userId];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User record not found.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Setup completed successfully!',
+      user: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error during setup endpoint:', err);
+    res.status(500).json({ error: 'Database update failed.' });
+  }
+});
+
 // ----------------------------------------------------
 // 6. Beta Tester Portal Error Logging Endpoint
 // ----------------------------------------------------
