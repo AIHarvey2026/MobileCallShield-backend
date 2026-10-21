@@ -461,6 +461,45 @@ app.post('/api/subscription/activate', async (req, res) => {
     }
 });
 
+// Get current user details and assigned Twilio number
+app.get('/api/me', async (req, res) => {
+  const userId = req.query.userId;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required.' });
+  }
+
+  try {
+    const query = `
+      SELECT u.id, u.user_name, u.email, u.owner_phone, t.phone_number AS assigned_twilio_number
+      FROM public.users u
+      LEFT JOIN public.twilio_numbers t ON t.user_id = u.id
+      WHERE u.id = $1
+    `;
+    const result = await pool.query(query, [userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const user = result.rows[0];
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        name: user.user_name,
+        email: user.email,
+        phoneNumber: user.owner_phone,
+        assignedTwilioNumber: user.assigned_twilio_number || null
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching user details:', err);
+    res.status(500).json({ error: 'Server error fetching user details.' });
+  }
+});
+
 // ----------------------------------------------------
 // 8. Twilio Voice Webhooks (Incoming Call Screening)
 // ----------------------------------------------------
