@@ -600,11 +600,13 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
-// GET /api/guardians/:userId
+// GET /api/guardians/:userId - Returns array of all guardians & overall protection status
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        const result = await pool.query(`
+       
+        // Fetch guardian contacts
+        const guardiansResult = await pool.query(`
             SELECT c.contact_id AS id,
                    c.contact_name AS name,
                    cpn.phone_number AS phone,
@@ -614,17 +616,45 @@ app.get('/api/guardians/:userId', async (req, res) => {
             JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
             LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
             WHERE ocr.owner_id = $1 AND ocr.is_guardian = TRUE AND ocr.is_active = TRUE
-            ORDER BY ocr.is_primary DESC LIMIT 1
+            ORDER BY ocr.is_primary DESC, c.contact_name ASC
         `, [userId]);
 
-        if (result.rows.length === 0) {
-            return res.status(200).json({ success: true, guardian: null });
+        // Fetch shield active status from users table
+        const userResult = await pool.query(`
+            SELECT COALESCE(is_shield_active, true) AS is_shield_active FROM users WHERE id = $1
+        `, [userId]);
+
+        const isShieldActive = userResult.rows.length > 0 ? userResult.rows[0].is_shield_active : true;
+
+        res.json({
+            success: true,
+            isShieldActive: isShieldActive,
+            guardians: guardiansResult.rows
+        });
+    } catch (err) {
+        console.error('Error fetching guardians:', err);
+        res.status(500).json({ error: 'Server error fetching guardian details.' });
+    }
+});
+
+// POST /api/guardians/toggle-shield - Requires Guardian PIN to switch ON/OFF
+app.post('/api/guardians/toggle-shield', async (req, res) => {
+    const { userId, guardianPin, isShieldActive } = req.body;
+
+    try {
+        const userResult = await pool.query('SELECT guardian_code FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
+
+        const dbGuardianCode = userResult.rows[0].guardian_code || '1234';
+        if (guardianPin !== dbGuardianCode) {
+            return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
         }
 
-        res.json({ success: true, guardian: result.rows[0] });
+        await pool.query('UPDATE users SET is_shield_active = $1 WHERE id = $2', [isShieldActive, userId]);
+        res.json({ success: true, isShieldActive });
     } catch (err) {
-        console.error('Error fetching guardian:', err);
-        res.status(500).json({ error: 'Server error fetching guardian details.' });
+        console.error('Error toggling shield:', err);
+        res.status(500).json({ error: 'Server error updating shield status.' });
     }
 });
 
@@ -682,8 +712,30 @@ app.post('/api/guardians/send-report', async (req, res) => {
             </table>
         `;
 
+        // Dispatch email via Nodemailer
         await transporter.sendMail({
             from: '"Senior Scam Shield Guardian" <support@mobilecallshield.com>',
+            to: targetEmail,
+            subject: `Call Activity Report for ${userName}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                    <h2 style="color: #2563eb; margin-top: 0;">Call Log Summary Report</h2>
+                    <p>Here is the call activity report for <strong>${userName}</strong>:</p>
+                    ${logsHtml}
+                    <p style="margin-top: 30px; font-size: 12px; color: #64748b;">Generated securely via Guardian PIN verification.</p>
+                </div>
+            `
+        });
+
+        res.json({ success: true, message: 'Report emailed successfully.' });
+    } catch (err) {
+        console.error('Error sending guardian report:', err);
+        res.status(500).json({ error: 'Server error sending report: ' + err.message });
+    }
+});
+
+        await transporter.sendMail({
+            from: '"Mobile Call Shield - Guardian" <support@mobilecallshield.com>',
             to: targetEmail,
             subject: `Call Activity Report for ${userName}`,
             html: `
