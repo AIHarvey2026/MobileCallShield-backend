@@ -9,6 +9,18 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.use(express.json());
+
+// Configure Nodemailer Transporter
+const transporter = nodemailer.createTransport({
+    service: 'gmail', // or your SMTP provider details
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
+
 
 // Trust reverse proxy (Render) for express-rate-limit
 app.set('trust proxy', 1);
@@ -733,7 +745,6 @@ app.post('/api/guardians/send-report', async (req, res) => {
         res.status(500).json({ error: 'Server error sending report: ' + err.message });
     }
 });
-
         await transporter.sendMail({
             from: '"Mobile Call Shield - Guardian" <support@mobilecallshield.com>',
             to: targetEmail,
