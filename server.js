@@ -600,6 +600,109 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
+// GET /api/guardians/:userId
+app.get('/api/guardians/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query(`
+            SELECT c.contact_id AS id,
+                   c.contact_name AS name,
+                   cpn.phone_number AS phone,
+                   ocr.is_primary,
+                   ocr.is_guardian
+            FROM contacts c
+            JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
+            LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
+            WHERE ocr.owner_id = $1 AND ocr.is_guardian = TRUE AND ocr.is_active = TRUE
+            ORDER BY ocr.is_primary DESC LIMIT 1
+        `, [userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(200).json({ success: true, guardian: null });
+        }
+
+        res.json({ success: true, guardian: result.rows[0] });
+    } catch (err) {
+        console.error('Error fetching guardian:', err);
+        res.status(500).json({ error: 'Server error fetching guardian details.' });
+    }
+});
+
+// POST /api/guardians/send-report
+app.post('/api/guardians/send-report', async (req, res) => {
+    const { userId, guardianPin, reportType } = req.body;
+
+    if (!userId || !guardianPin) {
+        return res.status(400).json({ error: 'User ID and Guardian PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT guardian_code, user_name, email FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbGuardianCode = userResult.rows[0].guardian_code || '1234';
+        if (guardianPin !== dbGuardianCode) {
+            return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
+        }
+
+        const userName = userResult.rows[0].user_name || 'Senior User';
+        const targetEmail = userResult.rows[0].email;
+
+        let timeInterval = "INTERVAL '7 days'";
+        if (reportType === 'daily') timeInterval = "INTERVAL '1 day'";
+        if (reportType === 'monthly') timeInterval = "INTERVAL '30 days'";
+
+        const logsResult = await pool.query(`
+            SELECT caller_phone, called_phone, status, voicemail_url, created_at
+            FROM call_logs
+            WHERE user_id = $1 AND created_at >= NOW() - ${timeInterval}
+            ORDER BY created_at DESC
+        `, [userId]);
+
+        const logs = logsResult.rows;
+
+        let logsHtml = logs.length === 0 ? '<p>No call logs found for this period.</p>' : `
+            <table style="width:100%; border-collapse: collapse; font-size: 14px;">
+                <tr style="background-color: #f1f5f9; text-align: left;">
+                    <th style="padding: 8px; border: 1px solid #cbd5e1;">Time</th>
+                    <th style="padding: 8px; border: 1px solid #cbd5e1;">Caller</th>
+                    <th style="padding: 8px; border: 1px solid #cbd5e1;">Status</th>
+                    <th style="padding: 8px; border: 1px solid #cbd5e1;">Voicemail</th>
+                </tr>
+                ${logs.map(log => `
+                    <tr>
+                        <td style="padding: 8px; border: 1px solid #cbd5e1;">${new Date(log.created_at).toLocaleString()}</td>
+                        <td style="padding: 8px; border: 1px solid #cbd5e1;">${log.caller_phone}</td>
+                        <td style="padding: 8px; border: 1px solid #cbd5e1;">${log.status}</td>
+                        <td style="padding: 8px; border: 1px solid #cbd5e1;">${log.voicemail_url ? `<a href="${log.voicemail_url}">Play Audio</a>` : 'None'}</td>
+                    </tr>
+                `).join('')}
+            </table>
+        `;
+
+        await transporter.sendMail({
+            from: '"Senior Scam Shield Guardian" <support@mobilecallshield.com>',
+            to: targetEmail,
+            subject: `Call Activity Report for ${userName}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+                    <h2 style="color: #2563eb; margin-top: 0;">Call Log Report (${reportType || '7 days'})</h2>
+                    <p>Here is the call activity summary for <strong>${userName}</strong>:</p>
+                    ${logsHtml}
+                    <p style="margin-top: 30px; font-size: 12px; color: #64748b;">Verified via Guardian PIN.</p>
+                </div>
+            `
+        });
+
+        res.json({ success: true, message: 'Report emailed successfully.' });
+    } catch (err) {
+        console.error('Error sending guardian report:', err);
+        res.status(500).json({ error: 'Server error sending report.' });
+    }
+});
+
 
 // ----------------------------------------------------
 // Call Logs
