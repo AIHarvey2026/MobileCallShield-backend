@@ -600,6 +600,39 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
+
+// ----------------------------------------------------
+// Call Logs
+// ----------------------------------------------------
+// GET /api/call-logs/:userId?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+app.get('/api/call-logs/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { startDate, endDate } = req.query;
+
+        let query = `
+            SELECT id, user_id, caller_phone, called_phone, status, voicemail_url, created_at
+            FROM call_logs
+            WHERE user_id = $1
+        `;
+        const queryParams = [userId];
+
+        if (startDate && endDate) {
+            queryParams.push(startDate, `${endDate} 23:59:59`);
+            query += ` AND created_at BETWEEN $2 AND $3`;
+        }
+
+        query += ` ORDER BY id DESC LIMIT 100`;
+
+        const result = await pool.query(query, queryParams);
+        res.json({ success: true, logs: result.rows });
+    } catch (err) {
+        console.error('Error fetching call logs:', err);
+        res.status(500).json({ error: 'Server error fetching call logs: ' + err.message });
+    }
+});
+
+
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
