@@ -467,11 +467,16 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const result = await pool.query(`
-            SELECT c.contact_id AS id, ocr.owner_id AS user_id, c.contact_name AS name,
+            SELECT c.contact_id AS id,
+                   ocr.owner_id AS user_id,
+                   c.contact_name AS name,
                    COALESCE(ocr.is_active, true) AS is_active,
                    COALESCE(ocr.is_guardian, false) AS is_guardian,
                    COALESCE(ocr.is_primary, false) AS is_primary,
-                   COALESCE(json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL), '[]') AS phone_numbers
+                   COALESCE(
+                       json_agg(cpn.phone_number) FILTER (WHERE cpn.phone_number IS NOT NULL AND cpn.phone_number != ''),
+                       '[]'
+                   ) AS phone_numbers
             FROM contacts c
             JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
             LEFT JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
@@ -479,6 +484,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
             GROUP BY c.contact_id, ocr.owner_id, c.contact_name, ocr.is_active, ocr.is_guardian, ocr.is_primary
             ORDER BY c.contact_name ASC
         `, [userId]);
+
         res.json(result.rows);
     } catch (err) {
         console.error('Error fetching trusted contacts:', err);
