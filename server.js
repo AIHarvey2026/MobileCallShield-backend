@@ -733,6 +733,38 @@ app.post('/api/guardians/send-report', async (req, res) => {
     }
 });
 
+
+// GET /api/guardians/managed-seniors/:guardianUserId
+app.get('/api/guardians/managed-seniors/:guardianUserId', async (req, res) => {
+    try {
+        const { guardianUserId } = req.params;
+
+        const result = await pool.query(`
+            SELECT u.id AS senior_id,
+                   u.user_name AS senior_name,
+                   u.owner_phone AS senior_phone,
+                   u.email AS senior_email,
+                   COALESCE(u.is_shield_active, true) AS is_shield_active,
+                   ocr.is_primary
+            FROM owner_contact_relationship ocr
+            JOIN users u ON ocr.owner_id = u.id
+            WHERE ocr.guardian_user_id = $1
+              AND ocr.is_guardian = TRUE
+              AND ocr.is_active = TRUE
+            ORDER BY ocr.is_primary DESC, u.user_name ASC
+        `, [guardianUserId]);
+
+        res.json({
+            success: true,
+            managedSeniors: result.rows
+        });
+    } catch (err) {
+        console.error('Error fetching managed seniors:', err);
+        res.status(500).json({ error: 'Server error fetching managed accounts.' });
+    }
+});
+
+
 // ----------------------------------------------------
 // Call Logs
 // ----------------------------------------------------
