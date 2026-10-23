@@ -713,26 +713,6 @@ app.post('/api/guardians/send-report', async (req, res) => {
 
         // Dispatch email via Nodemailer
         await transporter.sendMail({
-            from: '"Senior Scam Shield Guardian" <support@mobilecallshield.com>',
-            to: targetEmail,
-            subject: `Call Activity Report for ${userName}`,
-            html: `
-                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                    <h2 style="color: #2563eb; margin-top: 0;">Call Log Summary Report</h2>
-                    <p>Here is the call activity report for <strong>${userName}</strong>:</p>
-                    ${logsHtml}
-                    <p style="margin-top: 30px; font-size: 12px; color: #64748b;">Generated securely via Guardian PIN verification.</p>
-                </div>
-            `
-        });
-
-        res.json({ success: true, message: 'Report emailed successfully.' });
-    } catch (err) {
-        console.error('Error sending guardian report:', err);
-        res.status(500).json({ error: 'Server error sending report: ' + err.message });
-    }
-});
-        await transporter.sendMail({
             from: '"Mobile Call Shield - Guardian" <support@mobilecallshield.com>',
             to: targetEmail,
             subject: `Call Activity Report for ${userName}`,
@@ -752,7 +732,6 @@ app.post('/api/guardians/send-report', async (req, res) => {
         res.status(500).json({ error: 'Server error sending report.' });
     }
 });
-
 
 // ----------------------------------------------------
 // Call Logs
@@ -784,7 +763,6 @@ app.get('/api/call-logs/:userId', async (req, res) => {
         res.status(500).json({ error: 'Server error fetching call logs: ' + err.message });
     }
 });
-
 
 // ----------------------------------------------------
 // Server Listen
