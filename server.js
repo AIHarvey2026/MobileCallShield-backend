@@ -733,8 +733,13 @@ app.post('/api/guardians/send-report', async (req, res) => {
     }
 });
 
+// ----------------------------------------------------
+// Multi-Role Guardian Switcher Routes
+// ----------------------------------------------------
+
 
 // GET /api/guardians/managed-seniors/:guardianUserId
+// Fetches all seniors (Mom, Dad, Grandma, etc.) managed by the logged-in guardian
 app.get('/api/guardians/managed-seniors/:guardianUserId', async (req, res) => {
     try {
         const { guardianUserId } = req.params;
@@ -761,6 +766,36 @@ app.get('/api/guardians/managed-seniors/:guardianUserId', async (req, res) => {
     } catch (err) {
         console.error('Error fetching managed seniors:', err);
         res.status(500).json({ error: 'Server error fetching managed accounts.' });
+    }
+});
+
+// POST /api/guardians/verify-switch
+// Verifies Guardian PIN before authorizing context switch to a senior's profile
+app.post('/api/guardians/verify-switch', async (req, res) => {
+    const { seniorUserId, guardianPin } = req.body;
+
+    if (!seniorUserId || !guardianPin) {
+        return res.status(400).json({ error: 'Senior User ID and Guardian PIN are required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT guardian_code, user_name FROM users WHERE id = $1', [seniorUserId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Senior user not found.' });
+        }
+
+        const dbPin = userResult.rows[0].guardian_code || '1234';
+        if (guardianPin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect Guardian PIN.' });
+        }
+
+        res.json({
+            success: true,
+            seniorName: userResult.rows[0].user_name
+        });
+    } catch (err) {
+        console.error('Error verifying switch PIN:', err);
+        res.status(500).json({ error: 'Server error verifying Guardian PIN.' });
     }
 });
 
