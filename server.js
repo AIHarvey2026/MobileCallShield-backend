@@ -599,6 +599,70 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
+// ==========================================
+// 1. PATCH: Toggle Guardian Status
+// ==========================================
+app.patch('/api/trusted-contacts/:id/guardian', async (req, res) => {
+    const contactId = req.params.id;
+    const { is_guardian, userId } = req.body;
+
+    console.log(`[PATCH Guardian] Contact ID: ${contactId}, User ID: ${userId}, is_guardian: ${is_guardian}`);
+
+    try {
+        const result = await pool.query(
+            'UPDATE owner_contact_relationship SET is_guardian = $1 WHERE contact_id = $2 AND owner_id = $3',
+            [is_guardian, contactId, userId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Contact relationship not found.' });
+        }
+
+        res.json({ success: true, message: 'Guardian status updated successfully.' });
+    } catch (err) {
+        console.error('Error updating guardian status:', err);
+        res.status(500).json({ error: 'Server error updating guardian status.' });
+    }
+});
+
+// ==========================================
+// 2. PUT: Set Primary Guardian
+// ==========================================
+app.put('/api/guardians/:userId/primary/:contactId', async (req, res) => {
+    const { userId, contactId } = req.params;
+
+    console.log(`[PUT Primary] User ID: ${userId}, Contact ID: ${contactId}`);
+
+    try {
+        // Step 1: Clear primary status for all other contacts owned by this user
+        await pool.query(
+            'UPDATE owner_contact_relationship SET is_primary = FALSE WHERE owner_id = $1',
+            [userId]
+        );
+
+        // Step 2: Set the chosen contact as primary (and enforce is_guardian = TRUE)
+        const result = await pool.query(
+            'UPDATE owner_contact_relationship SET is_primary = TRUE, is_guardian = TRUE WHERE contact_id = $1 AND owner_id = $2 RETURNING *',
+            [contactId, userId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Contact not found or does not belong to this user.' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Primary guardian updated successfully.',
+            updated: result.rows[0]
+        });
+    } catch (err) {
+        console.error('Error updating primary guardian:', err);
+        res.status(500).json({ error: 'Server error updating primary guardian.' });
+    }
+});
+
+
+
 // GET /api/guardians/:userId - Returns array of all guardians & overall protection status
 app.get('/api/guardians/:userId', async (req, res) => {
     try {
