@@ -20,6 +20,17 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+// Helper function to extract 10 digits and format as (XXX) XXX-XXXX
+function normalizeIncomingPhone(rawFrom) {
+    if (!rawFrom) return null;
+    const digitsOnly = rawFrom.replace(/\D/g, '');
+    const tenDigits = digitsOnly.slice(-10);
+    if (tenDigits.length !== 10) return rawFrom;
+    return `(${tenDigits.slice(0, 3)}) ${tenDigits.slice(3, 6)}-${tenDigits.slice(6)}`;
+}
+
+
+
 // Trust reverse proxy (Render) for express-rate-limit
 app.set('trust proxy', 1);
 
@@ -350,6 +361,11 @@ app.post('/api/setup', authRequired, async (req, res) => {
 // ----------------------------------------------------
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
+    const rawCallerId = req.body.From;
+    const normalizedCallerId = normalizeIncomingPhone(rawCallerId);
+    
+    console.log(`[INCOMING CALL] To: ${twilioNumber} | Raw From: ${rawCallerId} -> Normalized: ${normalizedCallerId}`);
+
     const twiml = new twilio.twiml.VoiceResponse();
     try {
         const userResult = await pool.query(`
@@ -366,6 +382,29 @@ app.post('/voice', async (req, res) => {
                 return res.send(twiml.toString());
             }
 
+            // --- CHECK IF INCOMING CALLER IS A TRUSTED CONTACT ---
+            const contactQuery = `
+                SELECT c.contact_id, c.contact_name 
+                FROM contacts c
+                JOIN contact_phone_numbers cpn ON c.contact_id = cpn.contact_id
+                JOIN owner_contact_relationship ocr ON c.contact_id = ocr.contact_id
+                WHERE ocr.owner_id = $1 
+                  AND ocr.is_active = TRUE 
+                  AND cpn.phone_number = $2
+                LIMIT 1;
+            `;
+            const contactResult = await pool.query(contactQuery, [user.id, normalizedCallerId]);
+
+            if (contactResult.rows.length > 0) {
+                // Trusted contact found! Bypass screening and ring the user directly
+                console.log(`[CALL SHIELD] Trusted caller recognized: ${contactResult.rows[0].contact_name} (${normalizedCallerId}). Bypassing screening.`);
+                twiml.dial(user.owner_phone);
+                res.type('text/xml');
+                return res.send(twiml.toString());
+            }
+            // ----------------------------------------------------
+
+            // If not a trusted contact, proceed with screening
             const gather = twiml.gather({
                 input: 'speech dtmf',
                 numDigits: 4,
