@@ -558,16 +558,28 @@ app.post('/api/trusted-contacts', async (req, res) => {
         client.release();
     }
 });
+
+//Delete Trusted Contact - changing owner_contact_relationship (is_active)
 app.delete('/api/trusted-contacts/:id', async (req, res) => {
     const contactId = req.params.id;
     const { userId } = req.query;
+   
     try {
         const result = await pool.query(
-            'UPDATE owner_contact_relationship SET is_active = FALSE WHERE contact_id = $1 AND owner_id = $2',
+            `UPDATE owner_contact_relationship
+             SET is_active = FALSE, is_guardian = FALSE, is_primary = FALSE
+             WHERE contact_id = $1 AND owner_id = $2`,
             [contactId, userId]
         );
-        if (result.rowCount === 0) return res.status(404).json({ error: 'Contact relationship not found.' });
-        res.json({ success: true, message: 'Contact deactivated successfully.' });
+       
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Contact relationship not found.' });
+        }
+       
+        res.json({
+            success: true,
+            message: 'Contact fully deactivated and privileges revoked successfully.'
+        });
     } catch (err) {
         console.error('Error deleting contact:', err);
         res.status(500).json({ error: 'Server error deleting contact.' });
