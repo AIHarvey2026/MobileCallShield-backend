@@ -491,40 +491,64 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     }
 });
 
-// POST /api/trusted-contacts (Single contact add endpoint)
+// Helper to format phone numbers into (###) ###-####
+function formatPhoneNumber(phone) {
+    if (!phone) return '';
+    // Strip all non-digit characters
+    const digits = phone.replace(/\D/g, '');
+    
+    // Handle 11 digits starting with 1 (US country code)
+    const cleanDigits = (digits.length === 11 && digits.startsWith('1')) 
+        ? digits.slice(1) 
+        : digits;
+
+    if (cleanDigits.length === 10) {
+        return `(${cleanDigits.slice(0, 3)}) ${cleanDigits.slice(3, 6)}-${cleanDigits.slice(6)}`;
+    }
+    
+    // Fallback to trimmed original if it doesn't fit standard 10 digits
+    return phone.trim();
+}
+
+// POST /api/trusted-contacts
 app.post('/api/trusted-contacts', async (req, res) => {
     const { userId, name, phoneNumber } = req.body;
     if (!userId || !name || !phoneNumber) {
         return res.status(400).json({ error: 'User ID, name, and phone number are required.' });
     }
 
+    const formattedPhone = formatPhoneNumber(phoneNumber);
     const client = await pool.connect();
+    
     try {
         await client.query('BEGIN');
 
+        // 1. Insert into contacts table
         const contactResult = await client.query(
             'INSERT INTO contacts (contact_name) VALUES ($1) RETURNING contact_id',
             [name]
         );
         const contactId = contactResult.rows[0].contact_id;
 
+        // 2. Link owner to contact
         await client.query(`
             INSERT INTO owner_contact_relationship (owner_id, contact_id, is_active, is_guardian)
             VALUES ($1, $2, TRUE, FALSE)
         `, [userId, contactId]);
 
+        // 3. Insert formatted phone number into contact_phone_numbers
         await client.query(`
             INSERT INTO contact_phone_numbers (contact_id, phone_number)
             VALUES ($1, $2)
             ON CONFLICT DO NOTHING
-        `, [contactId, phoneNumber]);
+        `, [contactId, formattedPhone]);
 
         await client.query('COMMIT');
 
         res.status(201).json({
             success: true,
             message: 'Trusted contact added successfully.',
-            contact: { id: contactId, name, phone: phoneNumber }
+            contact: { id: contactId, name, phone: formattedPhone }
         });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -534,7 +558,6 @@ app.post('/api/trusted-contacts', async (req, res) => {
         client.release();
     }
 });
-
 app.delete('/api/trusted-contacts/:id', async (req, res) => {
     const contactId = req.params.id;
     const { userId } = req.query;
