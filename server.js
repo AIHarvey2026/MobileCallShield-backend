@@ -356,6 +356,39 @@ app.post('/api/setup', authRequired, async (req, res) => {
     }
 });
 
+
+// --- WHISPER PROMPT (Requires pressing 1 to accept bridged call) ---
+app.post('/whisper', (req, res) => {
+    const twiml = new twilio.twiml.VoiceResponse();
+    const gather = twiml.gather({
+        numDigits: 1,
+        action: '/process-whisper',
+        method: 'POST',
+        timeout: 5
+    });
+    gather.say({ voice: 'Polly.Joanna-Neural' }, 'Incoming Call Shield connection. Press 1 to accept.');
+    
+    // If no keypress is detected (e.g., carrier voicemail answered), hang up this leg
+    twiml.hangup();
+    res.type('text/xml');
+    res.send(twiml.toString());
+});
+
+app.post('/process-whisper', (req, res) => {
+    const twiml = new twilio.twiml.VoiceResponse();
+    const digit = req.body.Digits;
+
+    if (digit === '1') {
+        twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Connecting now.');
+    } else {
+        twiml.hangup();
+    }
+    res.type('text/xml');
+    res.send(twiml.toString());
+});
+
+
+
 // ----------------------------------------------------
 // 6. Twilio Voice Webhooks
 // ----------------------------------------------------
@@ -377,13 +410,21 @@ app.post('/voice', async (req, res) => {
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
 
+            // Helper function to generate dial with whisper URL
+            const dialUser = (twimlResponse) => {
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    const whisperUrl = `${protocol}://${req.headers.host}/whisper`;
+
+    const dial = twimlResponse.dial({
+        callerId: twilioNumber,
+        answerOnBridge: true,
+        timeout: 20
+    });
+    dial.number({ url: whisperUrl }, user.owner_phone);
+};
             // If Call Shield is disabled, bridge call directly
             if (user.is_call_shield_enabled !== true) {
-                twiml.dial({ 
-                    callerId: twilioNumber,
-                    answerOnBridge: true,
-                    timeout: 20 
-                }, user.owner_phone);
+                dialUser(twiml);
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
@@ -402,15 +443,8 @@ app.post('/voice', async (req, res) => {
             const contactResult = await pool.query(contactQuery, [user.id, normalizedCallerId]);
 
             if (contactResult.rows.length > 0) {
-                // Trusted contact found! Bypass screening and ring the user directly
                 console.log(`[CALL SHIELD] Trusted caller recognized: ${contactResult.rows[0].contact_name} (${normalizedCallerId}). Bypassing screening.`);
-                
-                twiml.dial({ 
-                    callerId: twilioNumber,
-                    answerOnBridge: true,
-                    timeout: 20 
-                }, user.owner_phone);
-                
+                dialUser(twiml);
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
