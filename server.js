@@ -376,9 +376,14 @@ app.post('/voice', async (req, res) => {
 
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
+
+            // If Call Shield is disabled, bridge call directly
             if (user.is_call_shield_enabled !== true) {
-                // FIXED: Explicitly set callerId so Twilio doesn't block it
-                twiml.dial({ callerId: twilioNumber }, user.owner_phone);
+                twiml.dial({ 
+                    callerId: twilioNumber,
+                    answerOnBridge: true,
+                    timeout: 20 
+                }, user.owner_phone);
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
@@ -400,8 +405,12 @@ app.post('/voice', async (req, res) => {
                 // Trusted contact found! Bypass screening and ring the user directly
                 console.log(`[CALL SHIELD] Trusted caller recognized: ${contactResult.rows[0].contact_name} (${normalizedCallerId}). Bypassing screening.`);
                 
-                // FIXED: Explicitly set callerId here as well
-                twiml.dial({ callerId: twilioNumber }, user.owner_phone);
+                twiml.dial({ 
+                    callerId: twilioNumber,
+                    answerOnBridge: true,
+                    timeout: 20 
+                }, user.owner_phone);
+                
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
@@ -460,7 +469,11 @@ app.post('/process-passphrase', async (req, res) => {
 
         if (trustedCheck.rows.length > 0 || (spokenPassphrase.length > 0 && spokenPassphrase.includes(userPasscode))) {
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Connecting your call now.');
-            twiml.dial(user.owner_phone);
+            twiml.dial({ 
+                callerId: twilioNumber,
+                answerOnBridge: true,
+                timeout: 20 
+            }, user.owner_phone);
         } else {
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Passcode not recognized. Please leave a message after the tone.');
             twiml.record({ action: '/save-voicemail', method: 'POST', maxLength: 60, finishOnKey: '#' });
