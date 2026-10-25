@@ -795,6 +795,52 @@ app.post('/api/guardians/toggle-shield', async (req, res) => {
     }
 });
 
+// PATCH /api/guardians/role
+// Updates a contact's guardian status and enforces the single-primary rule
+app.patch('/api/guardians/role', async (req, res) => {
+    const { ownerId, contactId, isGuardian, isPrimary } = req.body;
+
+    if (!ownerId || !contactId) {
+        return res.status(400).json({ error: 'Owner ID and Contact ID are required.' });
+    }
+
+    try {
+        await pool.query('BEGIN');
+
+        // If setting this contact as primary, remove primary status from all other contacts for this owner
+        if (isPrimary) {
+            await pool.query(`
+                UPDATE owner_contact_relationship
+                SET is_primary = FALSE
+                WHERE owner_id = $1;
+            `, [ownerId]);
+        }
+
+        // Update the target contact's relationship flags
+        // Note: If a contact is primary, they must also be a guardian
+        const effectiveGuardianStatus = isPrimary ? true : isGuardian;
+
+        await pool.query(`
+            UPDATE owner_contact_relationship
+            SET is_guardian = $1,
+                is_primary = $2
+            WHERE owner_id = $3 AND contact_id = $4;
+        `, [effectiveGuardianStatus, isPrimary || false, ownerId, contactId]);
+
+        await pool.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Guardian roles updated successfully.'
+        });
+    } catch (err) {
+        await pool.query('ROLLBACK');
+        console.error('Error updating guardian roles:', err);
+        res.status(500).json({ error: 'Server error updating guardian roles.' });
+    }
+});
+
+
 // POST /api/guardians/send-report
 app.post('/api/guardians/send-report', async (req, res) => {
     const { userId, guardianPin, reportType } = req.body;
