@@ -1144,6 +1144,68 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     }
 });
 
+
+// ----------------------------------------------------
+// Verify Guardian Access
+// ----------------------------------------------------
+
+async function verifyAccountAccess(req, res, next) {
+    const userId = req.user.id; // Logged in user
+    const targetUserId = req.headers['x-target-account-id'] || userId;
+
+    if (userId === parseInt(targetUserId)) {
+        req.targetUserId = userId;
+        return next();
+    }
+
+    // Check guardian permission
+    const result = await pool.query(
+        'SELECT * FROM account_guardians WHERE guardian_user_id = $1 AND dependent_user_id = $2',
+        [userId, targetUserId]
+    );
+
+    if (result.rows.length === 0) {
+        return res.status(403).json({ error: 'Unauthorized access to this account.' });
+    }
+
+    req.targetUserId = targetUserId;
+    next();
+}
+
+// ----------------------------------------------------
+// Carrier Settings Route (Protected by Guardian Access)
+// ----------------------------------------------------
+app.get('/api/carrier-settings', verifyAccountAccess, async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM carrier_settings WHERE user_id = $1',
+            [req.targetUserId] // Uses the account owner or dependent ID resolved by middleware
+        );
+        res.json(result.rows[0] || {});
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.post('/api/carrier-settings', verifyAccountAccess, async (req, res) => {
+    const { carrier_name, forwarding_number } = req.body;
+    try {
+        // Upsert carrier settings for the target user
+        await pool.query(
+            `INSERT INTO carrier_settings (user_id, carrier_name, forwarding_number) 
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id) 
+             DO UPDATE SET carrier_name = $2, forwarding_number = $3`,
+            [req.targetUserId, carrier_name, forwarding_number]
+        );
+        res.json({ message: 'Carrier settings saved successfully' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
