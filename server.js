@@ -359,7 +359,7 @@ app.post('/api/setup', authRequired, async (req, res) => {
 // ----------------------------------------------------
 // 6. Twilio Voice Webhooks
 // ----------------------------------------------------
-aapp.post('/voice', async (req, res) => {
+app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     const rawCallerId = req.body.From;
     const normalizedCallerId = normalizeIncomingPhone(rawCallerId);
