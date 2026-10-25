@@ -412,16 +412,17 @@ app.post('/voice', async (req, res) => {
 
             // Helper function to generate dial with whisper URL
             const dialUser = (twimlResponse) => {
-    const protocol = req.headers['x-forwarded-proto'] || 'https';
-    const whisperUrl = `${protocol}://${req.headers.host}/whisper`;
+                const protocol = req.headers['x-forwarded-proto'] || 'https';
+                const whisperUrl = `${protocol}://${req.headers.host}/whisper`;
 
-    const dial = twimlResponse.dial({
-        callerId: twilioNumber,
-        answerOnBridge: true,
-        timeout: 20
-    });
-    dial.number({ url: whisperUrl }, user.owner_phone);
-};
+                const dial = twimlResponse.dial({
+                    callerId: twilioNumber,
+                    answerOnBridge: true,
+                    timeout: 20
+                });
+                dial.number({ url: whisperUrl }, user.owner_phone);
+            };
+
             // If Call Shield is disabled, bridge call directly
             if (user.is_call_shield_enabled !== true) {
                 dialUser(twiml);
@@ -460,7 +461,12 @@ app.post('/voice', async (req, res) => {
                 speechTimeout: 'auto'
             });
             gather.say({ voice: 'Polly.Joanna-Neural' }, 'Hello! Please state your name or passcode after the tone.');
+            
+            // FIXED: Removed twiml.hangup() here so Gather isn't interrupted!
+            // If caller does nothing during gather, fallback message plays:
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive any input. Goodbye.');
             twiml.hangup();
+
             res.type('text/xml');
             return res.send(twiml.toString());
         }
