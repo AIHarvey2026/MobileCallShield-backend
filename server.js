@@ -29,7 +29,65 @@ function normalizeIncomingPhone(rawFrom) {
     return `(${tenDigits.slice(0, 3)}) ${tenDigits.slice(3, 6)}-${tenDigits.slice(6)}`;
 }
 
+// ==========================================
+// CARRIER FORWARDING HELPER
+// ==========================================
+function getCarrierForwardingCode(carrier, twilioNumber) {
+  if (!twilioNumber) return '';
+  
+  // Strip non-digit characters (+1, dashes, spaces)
+  const cleanNum = twilioNumber.replace(/\D/g, ''); 
 
+  switch (carrier?.toLowerCase()) {
+    case 'verizon':
+    case 'visible':
+      return `*71${cleanNum}`; // Conditional Forwarding (No Answer / Busy)
+      
+    case 'att':
+    case 'cricket':
+      return `**004*1${cleanNum}#`; // AT&T Conditional Forwarding GSM string
+      
+    case 'tmobile':
+    case 'mint':
+    case 'metro':
+      return `**61*1${cleanNum}#`; // T-Mobile Conditional Forwarding GSM string
+      
+    default:
+      // Fallback default
+      return `*71${cleanNum}`;
+  }
+}
+
+// ==========================================
+// ONBOARDING ACTIVATION CODE ENDPOINT
+// ==========================================
+app.get('/api/user/activation-code', async (req, res) => {
+  const { userId } = req.query;
+
+  try {
+    const userResult = await pool.query(
+      'SELECT carrier_name, twilio_screening_number FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { carrier_name, twilio_screening_number } = userResult.rows[0];
+    const dialCode = getCarrierForwardingCode(carrier_name, twilio_screening_number);
+
+    res.json({
+      carrier: carrier_name,
+      twilioNumber: twilio_screening_number,
+      dialCode: dialCode,
+      telUri: `tel:${encodeURIComponent(dialCode)}` // Pre-formatted link for mobile dialer
+    });
+  } catch (err) {
+    console.error('Error generating activation code:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Trust reverse proxy (Render) for express-rate-limit
 app.set('trust proxy', 1);
@@ -412,17 +470,17 @@ app.post('/voice', async (req, res) => {
 
             // Helper function to generate dial with whisper URL
             const dialUser = (twimlResponse) => {
-                const protocol = req.headers['x-forwarded-proto'] || 'https';
-                const whisperUrl = `${protocol}://${req.headers.host}/whisper`;
+    		const protocol = req.headers['x-forwarded-proto'] || 'https';
+    		const whisperUrl = `${protocol}://${req.headers.host}/whisper`;
 
-                const dial = twimlResponse.dial({
-                    callerId: twilioNumber,
-                    answerOnBridge: true,
-                    timeout: 20
-                });
-                dial.number({ url: whisperUrl }, user.owner_phone);
-            };
-
+    		const dial = twimlResponse.dial({
+        	callerId: twilioNumber,
+        	answerOnBridge: true,
+        	timeout: 20,
+        	timeLimit: 900 // <--- Adds a 15-minute hard stop to control Twilio per-minute costs
+    	});
+    		dial.number({ url: whisperUrl }, user.owner_phone);
+	};
             // If Call Shield is disabled, bridge call directly
             if (user.is_call_shield_enabled !== true) {
                 dialUser(twiml);
