@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -10,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
+app.use(express.static('public'));
 
 // Configure Nodemailer Transporter (Declared ONLY ONCE)
 const transporter = nodemailer.createTransport({
@@ -97,8 +99,11 @@ app.set('trust proxy', 1);
 // ----------------------------------------------------
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
+
 // ----------------------------------------------------
 // 2. Middleware Configuration
 // ----------------------------------------------------

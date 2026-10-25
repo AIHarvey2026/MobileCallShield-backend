@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Call Shield Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; }
+        .container { max-width: 420px; margin: 30px auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: #1a1a1a; }
+        label { display: block; margin-top: 15px; font-weight: 600; font-size: 14px; color: #444; }
+        input, select, button { width: 100%; padding: 12px; margin-top: 6px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
+        .btn-primary { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; margin-top: 20px; }
+        .btn-activate { background: #28a745; color: white; border: none; font-weight: bold; text-decoration: none; display: block; text-align: center; margin-top: 20px; line-height: 48px; border-radius: 8px; }
+        .hidden { display: none; }
+        .logout-btn { background: none; border: none; color: #dc3545; cursor: pointer; padding: 0; margin-top: 15px; width: auto; font-size: 14px; text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- SECTION 1: LOGIN -->
+    <div id="loginSection">
+        <h2>Login to Call Shield</h2>
+        <form onsubmit="handleLogin(event)">
+            <label for="email">Email Address</label>
+            <input type="email" id="email" required placeholder="you@example.com">
+            
+            <label for="password">Password</label>
+            <input type="password" id="password" required placeholder="••••••••">
+            
+            <button type="submit" class="btn-primary">Sign In</button>
+        </form>
+    </div>
+
+    <!-- SECTION 2: DASHBOARD (Hidden until logged in) -->
+    <div id="dashboardSection" class="hidden">
+        <h2 id="welcomeMsg">Welcome</h2>
+        <p style="color: #666; font-size: 14px;">Configure your carrier settings and activate protection below.</p>
+
+        <label for="carrierSelect">Select Mobile Carrier:</label>
+        <select id="carrierSelect">
+            <option value="verizon">Verizon / Visible</option>
+            <option value="att">AT&T / Cricket</option>
+            <option value="tmobile">T-Mobile / Mint / Metro</option>
+        </select>
+
+        <button class="btn-primary" onclick="saveCarrier()">Save Carrier</button>
+
+        <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
+
+        <h3>Activate Call Forwarding</h3>
+        <p style="font-size: 13px; color: #666;">Tap the button below to open your phone dialer and activate Call Shield forwarding.</p>
+        
+        <a id="activateBtn" href="#" class="btn-activate hidden">📞 Tap to Activate Shield</a>
+
+        <button class="logout-btn" onclick="handleLogout()">Log Out</button>
+    </div>
+</div>
+
+<script>
+    let currentUser = null;
+
+    // 1. Handle User Login
+    async function handleLogin(event) {
+        event.preventDefault();
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+
+        try {
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                localStorage.setItem('token', data.token);
+                localStorage.setItem('user', JSON.stringify(data.user));
+                initDashboard(data.user);
+            } else {
+                alert('Login failed: ' + (data.error || 'Check credentials'));
+            }
+        } catch (err) {
+            console.error('Error logging in:', err);
+            alert('Server error during login.');
+        }
+    }
+
+    // 2. Save Carrier Preference
+    async function saveCarrier() {
+        const carrierName = document.getElementById('carrierSelect').value;
+        const token = localStorage.getItem('token');
+
+        try {
+            const response = await fetch('/api/user/carrier', {
+                method: 'PUT',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ userId: currentUser.id, carrierName })
+            });
+
+            if (response.ok) {
+                alert('Carrier updated!');
+                loadActivationCode();
+            } else {
+                alert('Failed to update carrier.');
+            }
+        } catch (err) {
+            console.error('Error saving carrier:', err);
+        }
+    }
+
+    // 3. Fetch Forwarding Code for One-Tap Button
+    async function loadActivationCode() {
+        if (!currentUser) return;
+        const token = localStorage.getItem('token');
+
+        try {
+            const response = await fetch(`/api/user/activation-code?userId=${currentUser.id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await response.json();
+
+            if (response.ok && data.telUri) {
+                const btn = document.getElementById('activateBtn');
+                btn.href = data.telUri;
+                btn.classList.remove('hidden');
+            }
+        } catch (err) {
+            console.error('Error fetching activation code:', err);
+        }
+    }
+
+    // 4. Initialize Dashboard View
+    function initDashboard(user) {
+        currentUser = user;
+        document.getElementById('loginSection').classList.add('hidden');
+        document.getElementById('dashboardSection').classList.remove('hidden');
+        document.getElementById('welcomeMsg').innerText = `Hello, ${user.name || user.email}`;
+
+        if (user.carrierName) {
+            document.getElementById('carrierSelect').value = user.carrierName;
+        }
+        
+        loadActivationCode();
+    }
+
+    // 5. Logout Session
+    function handleLogout() {
+        localStorage.clear();
+        location.reload();
+    }
+
+    // Auto-login on load if token exists
+    window.onload = () => {
+        const savedUser = localStorage.getItem('user');
+        if (savedUser) {
+            initDashboard(JSON.parse(savedUser));
+        }
+    };
+</script>
+
+</body>
+</html>
