@@ -359,7 +359,7 @@ app.post('/api/setup', authRequired, async (req, res) => {
 // ----------------------------------------------------
 // 6. Twilio Voice Webhooks
 // ----------------------------------------------------
-app.post('/voice', async (req, res) => {
+aapp.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     const rawCallerId = req.body.From;
     const normalizedCallerId = normalizeIncomingPhone(rawCallerId);
@@ -377,7 +377,8 @@ app.post('/voice', async (req, res) => {
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
             if (user.is_call_shield_enabled !== true) {
-                twiml.dial(user.owner_phone);
+                // FIXED: Explicitly set callerId so Twilio doesn't block it
+                twiml.dial({ callerId: twilioNumber }, user.owner_phone);
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
@@ -398,7 +399,9 @@ app.post('/voice', async (req, res) => {
             if (contactResult.rows.length > 0) {
                 // Trusted contact found! Bypass screening and ring the user directly
                 console.log(`[CALL SHIELD] Trusted caller recognized: ${contactResult.rows[0].contact_name} (${normalizedCallerId}). Bypassing screening.`);
-                twiml.dial(user.owner_phone);
+                
+                // FIXED: Explicitly set callerId here as well
+                twiml.dial({ callerId: twilioNumber }, user.owner_phone);
                 res.type('text/xml');
                 return res.send(twiml.toString());
             }
