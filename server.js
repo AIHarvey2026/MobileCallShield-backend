@@ -357,10 +357,19 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     }
 });
 
+
+// Login 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        // Query user and their active Twilio screening number
+        const result = await pool.query(`
+            SELECT u.*, tn.phone_number as twilio_screening_number
+            FROM users u
+            LEFT JOIN twilio_numbers tn ON u.id = tn.user_id AND tn.is_active = true
+            WHERE u.email = $1
+        `, [email]);
+
         if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Invalid credentials: User not found.' });
         }
@@ -382,6 +391,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
                 name: user.user_name,
                 phoneNumber: user.owner_phone,
                 email: user.email,
+                carrierName: user.carrier_name,           // <--- Added carrier
+                twilioNumber: user.twilio_screening_number, // <--- Added Twilio line
                 subscriptionStatus: user.subscription_status || 'trialing',
                 isAdmin: user.is_admin || false
             }
@@ -391,7 +402,6 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         res.status(500).json({ error: 'Server error logging in.' });
     }
 });
-
 app.post('/api/setup', authRequired, async (req, res) => {
     const { owner_phone, phone_number, passphrase, pin } = req.body || {};
     const phone = toE164(owner_phone || phone_number);
