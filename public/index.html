@@ -7,40 +7,83 @@
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; }
     .container { max-width: 480px; margin: 30px auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-    h2 { margin-top: 0; color: #1a1a1a; }
+    h2 { margin-top: 0; color: #1a1a1a; margin-bottom: 6px; }
+    p.subtitle { color: #666; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
     label { display: block; margin-top: 15px; font-weight: 600; font-size: 14px; color: #444; }
-    input, select, button { width: 100%; padding: 12px; margin-top: 6px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
-    .account-switcher-box { background: #f8f9fa; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin-top: 15px; }
-    .btn-primary { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; margin-top: 20px; }
-    .btn-activate { background: #28a745; color: white; border: none; font-weight: bold; text-align: center; display: block; line-height: 48px; border-radius: 8px; text-decoration: none; margin-top: 20px; }
+    select, button { width: 100%; padding: 14px; margin-top: 6px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
+    
+    /* Prominent Carrier Selector Styling */
+    .carrier-box { background: #f4f7fa; border: 2px solid #007bff; padding: 16px; border-radius: 10px; margin-top: 10px; }
+    .carrier-label { font-size: 16px; font-weight: 700; color: #007bff; margin-top: 0; }
+    
+    .btn-activate { background: #28a745; color: white; border: none; font-weight: bold; text-align: center; display: block; line-height: 50px; border-radius: 8px; text-decoration: none; margin-top: 20px; cursor: pointer; font-size: 18px; }
+    .btn-activate:hover { background: #218838; }
+    .status-msg { margin-top: 15px; font-size: 14px; font-weight: 600; text-align: center; }
+    
+    /* Secondary Guardian Switcher */
+    .account-switcher-box { background: #fafafa; border: 1px dashed #ccc; padding: 10px 14px; border-radius: 8px; margin-top: 25px; }
+    .account-switcher-box label { font-size: 12px; color: #777; margin-top: 0; }
+    .account-switcher-box select { padding: 8px; font-size: 14px; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>Call Shield Dashboard</h2>
-  <p style="color: #666; font-size: 14px;">Configure settings and activate protection below.</p>
-  
-  <!-- Guardian Account Switcher -->
-  <div class="account-switcher-box">
-    <label for="accountSelector" style="margin-top: 0;">Managing Account:</label>
-    <select id="accountSelector">
-      <option value="">My Account (Self)</option>
+  <h2>Call Shield Activation</h2>
+  <p class="subtitle">Select your carrier to generate and dial your activation code.</p>
+
+  <!-- Instant Carrier Access -->
+  <div class="carrier-box">
+    <label for="carrier" class="carrier-label">1. Select Mobile Carrier</label>
+    <select id="carrier">
+      <option value="verizon">Verizon / Visible</option>
+      <option value="att">AT&T / Cricket</option>
+      <option value="tmobile">T-Mobile / Mint / Metro</option>
     </select>
   </div>
 
-  <label for="carrier">Mobile Carrier</label>
-  <select id="carrier">
-    <option value="verizon">Verizon / Visible</option>
-    <option value="att">AT&T / Cricket</option>
-    <option value="tmobile">T-Mobile / Mint / Metro</option>
-  </select>
+  <a href="#" id="activateBtn" class="btn-activate" onclick="handleActivation(event)">2. Activate Call Shield</a>
 
-  <label for="passphrase">Voice Passphrase</label>
-  <input type="text" id="passphrase" placeholder="e.g. Pineapple">
+  <div id="statusMsg" class="status-msg"></div>
 
-  <a href="#" id="activateBtn" class="btn-activate">Activate Call Shield</a>
+  <!-- Guardian Account Switcher (Secondary) -->
+  <div class="account-switcher-box">
+    <label for="accountSelector">Managing Account / Line:</label>
+    <select id="accountSelector">
+      <option value="self">My Line (Self)</option>
+    </select>
+  </div>
 </div>
+
+<script>
+  async function handleActivation(event) {
+    event.preventDefault();
+    const carrier = document.getElementById('carrier').value;
+    const statusMsg = document.getElementById('statusMsg');
+
+    statusMsg.style.color = '#007bff';
+    statusMsg.innerText = 'Generating activation code...';
+
+    try {
+      const response = await fetch(`/api/user/activation-code?carrier=${encodeURIComponent(carrier)}`);
+      const data = await response.json();
+
+      if (data.dialCode || data.telUri) {
+        statusMsg.style.color = '#28a745';
+        statusMsg.innerText = `Dial Code: ${data.dialCode || data.telUri}. Opening dialer...`;
+        
+        window.location.href = data.telUri || `tel:${encodeURIComponent(data.dialCode)}`;
+      } else {
+        statusMsg.style.color = '#dc3545';
+        statusMsg.innerText = data.error || 'Failed to generate activation code.';
+      }
+    } catch (err) {
+      console.error('Activation Error:', err);
+      statusMsg.style.color = '#dc3545';
+      statusMsg.innerText = 'Error connecting to server.';
+    }
+  }
+</script>
 
 </body>
 </html>

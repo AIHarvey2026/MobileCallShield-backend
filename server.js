@@ -66,32 +66,19 @@ function getCarrierForwardingCode(carrier, twilioNumber) {
 // ==========================================
 // ONBOARDING ACTIVATION CODE ENDPOINT
 // ==========================================
-app.get('/api/user/activation-code', async (req, res) => {
-  const { userId } = req.query;
+app.get('/api/user/activation-code', (req, res) => {
+  const { carrier } = req.query;
+  // Use your Twilio screening number from environment variables, with a fallback if needed
+  const twilioNumber = process.env.TWILIO_PHONE_NUMBER || '+15551234567'; 
 
-  try {
-    const userResult = await pool.query(
-      'SELECT carrier_name, twilio_screening_number FROM users WHERE id = $1',
-      [userId]
-    );
+  const dialCode = getCarrierForwardingCode(carrier, twilioNumber);
 
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const { carrier_name, twilio_screening_number } = userResult.rows[0];
-    const dialCode = getCarrierForwardingCode(carrier_name, twilio_screening_number);
-
-    res.json({
-      carrier: carrier_name,
-      twilioNumber: twilio_screening_number,
-      dialCode: dialCode,
-      telUri: `tel:${encodeURIComponent(dialCode)}` // Pre-formatted link for mobile dialer
-    });
-  } catch (err) {
-    console.error('Error generating activation code:', err);
-    res.status(500).json({ error: err.message });
-  }
+  res.json({
+    carrier: carrier || 'verizon',
+    twilioNumber: twilioNumber,
+    dialCode: dialCode,
+    telUri: `tel:${encodeURIComponent(dialCode)}` // Pre-formatted link for mobile dialer
+  });
 });
 
 // Trust reverse proxy (Render) for express-rate-limit
