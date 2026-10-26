@@ -1,242 +1,46 @@
-<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-  <meta http-equiv="Content-Style-Type" content="text/css">
-  <title></title>
-  <meta name="Generator" content="Cocoa HTML Writer">
-  <meta name="CocoaVersion" content="2775.1">
-  <style type="text/css">
-    p.p1 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica}
-    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica; min-height: 14.0px}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Call Shield Dashboard</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; }
+    .container { max-width: 480px; margin: 30px auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; color: #1a1a1a; }
+    label { display: block; margin-top: 15px; font-weight: 600; font-size: 14px; color: #444; }
+    input, select, button { width: 100%; padding: 12px; margin-top: 6px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
+    .account-switcher-box { background: #f8f9fa; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin-top: 15px; }
+    .btn-primary { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; margin-top: 20px; }
+    .btn-activate { background: #28a745; color: white; border: none; font-weight: bold; text-align: center; display: block; line-height: 48px; border-radius: 8px; text-decoration: none; margin-top: 20px; }
   </style>
 </head>
 <body>
-<p class="p1">&lt;!DOCTYPE html&gt;</p>
-<p class="p1">&lt;html lang="en"&gt;</p>
-<p class="p1">&lt;head&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;meta charset="UTF-8"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;meta name="viewport" content="width=device-width, initial-scale=1.0"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;title&gt;Call Shield Dashboard&lt;/title&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;style&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>.container { max-width: 480px; margin: 30px auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>h2 { margin-top: 0; color: #1a1a1a; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>h3 { font-size: 16px; margin-top: 20px; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>label { display: block; margin-top: 15px; font-weight: 600; font-size: 14px; color: #444; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>input, select, button { width: 100%; padding: 12px; margin-top: 6px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>.account-switcher-box { background: #f8f9fa; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin-top: 15px; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>.btn-primary { background: #007bff; color: white; border: none; font-weight: bold; cursor: pointer; margin-top: 20px; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>.btn-activate { background: #28a745; color: white; border: none; font-weight: bold; text-decoration: none; display: block; text-align: center; margin-top: 20px; line-height: 48px; border-radius: 8px; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>.hidden { display: none; }</p>
-<p class="p1"><span class="Apple-converted-space">        </span>.logout-btn { background: none; border: none; color: #dc3545; cursor: pointer; padding: 0; margin-top: 20px; width: auto; font-size: 14px; text-decoration: underline; }</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;/style&gt;</p>
-<p class="p1">&lt;/head&gt;</p>
-<p class="p1">&lt;body&gt;</p>
-<p class="p2"><br></p>
-<p class="p1">&lt;div class="container"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;!-- SECTION 1: LOGIN --&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="loginSection"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;h2&gt;Login to Call Shield&lt;/h2&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;form onsubmit="handleLogin(event)"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;label for="email"&gt;Email Address&lt;/label&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;input type="email" id="email" required placeholder="you@example.com"&gt;</p>
-<p class="p2"><span class="Apple-converted-space">            </span></p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;label for="password"&gt;Password&lt;/label&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;input type="password" id="password" required placeholder="••••••••"&gt;</p>
-<p class="p2"><span class="Apple-converted-space">            </span></p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;button type="submit" class="btn-primary"&gt;Sign In&lt;/button&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;/form&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;!-- SECTION 2: DASHBOARD (Hidden until logged in) --&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;div id="dashboardSection" class="hidden"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;h2 id="welcomeMsg"&gt;Welcome&lt;/h2&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;p style="color: #666; font-size: 14px;"&gt;Configure settings and activate protection below.&lt;/p&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;!-- Guardian Account Switcher --&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;div class="account-switcher-box"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;label for="accountSelector" style="margin-top: 0;"&gt;Managing Account:&lt;/label&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;select id="accountSelector" onchange="handleAccountSwitch(this.value)"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">                </span>&lt;option value=""&gt;My Account (Self)&lt;/option&gt;</p>
-<p class="p1"><span class="Apple-converted-space">                </span>&lt;!-- Dependent accounts load dynamically --&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;/select&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;/div&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;label for="carrierSelect"&gt;Select Mobile Carrier:&lt;/label&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;select id="carrierSelect"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;option value="verizon"&gt;Verizon / Visible&lt;/option&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;option value="att"&gt;AT&amp;T / Cricket&lt;/option&gt;</p>
-<p class="p1"><span class="Apple-converted-space">            </span>&lt;option value="tmobile"&gt;T-Mobile / Mint / Metro&lt;/option&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;/select&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;button class="btn-primary" onclick="saveCarrier()"&gt;Save Carrier&lt;/button&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;"&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;h3&gt;Activate Call Forwarding&lt;/h3&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;p style="font-size: 13px; color: #666;"&gt;Tap the button below to open your phone dialer and activate Call Shield forwarding.&lt;/p&gt;</p>
-<p class="p2"><span class="Apple-converted-space">        </span></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;a id="activateBtn" href="#" class="btn-activate hidden"&gt;📞 Tap to Activate Shield&lt;/a&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;br&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;button class="logout-btn" onclick="handleLogout()"&gt;Log Out&lt;/button&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
-<p class="p1">&lt;/div&gt;</p>
-<p class="p2"><br></p>
-<p class="p1">&lt;script&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>let currentUser = null;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>let activeTargetAccountId = null; // Tracks selected dependent ID for guardians</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// Helper for API requests with JWT and target account header</p>
-<p class="p1"><span class="Apple-converted-space">    </span>async function apiFetch(url, options = {}) {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const token = localStorage.getItem('token');</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const headers = {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>'Content-Type': 'application/json',</p>
-<p class="p1"><span class="Apple-converted-space">            </span>'Authorization': `Bearer ${token}`,</p>
-<p class="p1"><span class="Apple-converted-space">            </span>...options.headers</p>
-<p class="p1"><span class="Apple-converted-space">        </span>};</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>if (activeTargetAccountId) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>headers['x-target-account-id'] = activeTargetAccountId;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>const response = await fetch(url, { ...options, headers });</p>
-<p class="p1"><span class="Apple-converted-space">        </span>return response;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 1. Handle User Login</p>
-<p class="p1"><span class="Apple-converted-space">    </span>async function handleLogin(event) {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>event.preventDefault();</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const email = document.getElementById('email').value;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const password = document.getElementById('password').value;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>try {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>const response = await fetch('/api/auth/login', {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>method: 'POST',</p>
-<p class="p1"><span class="Apple-converted-space">                </span>headers: { 'Content-Type': 'application/json' },</p>
-<p class="p1"><span class="Apple-converted-space">                </span>body: JSON.stringify({ email, password })</p>
-<p class="p1"><span class="Apple-converted-space">            </span>});</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">            </span>const data = await response.json();</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">            </span>if (response.ok &amp;&amp; data.token) {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>localStorage.setItem('token', data.token);</p>
-<p class="p1"><span class="Apple-converted-space">                </span>localStorage.setItem('user', JSON.stringify(data.user));</p>
-<p class="p1"><span class="Apple-converted-space">                </span>initDashboard(data.user);</p>
-<p class="p1"><span class="Apple-converted-space">            </span>} else {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>alert('Login failed: ' + (data.error || 'Check credentials'));</p>
-<p class="p1"><span class="Apple-converted-space">            </span>}</p>
-<p class="p1"><span class="Apple-converted-space">        </span>} catch (err) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>console.error('Error logging in:', err);</p>
-<p class="p1"><span class="Apple-converted-space">            </span>alert('Server error during login.');</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 2. Load Managed Dependents for Switcher</p>
-<p class="p1"><span class="Apple-converted-space">    </span>async function loadDependents() {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>try {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>const response = await apiFetch('/api/guardians/dependents');</p>
-<p class="p1"><span class="Apple-converted-space">            </span>if (!response.ok) return;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">            </span>const dependents = await response.json();</p>
-<p class="p1"><span class="Apple-converted-space">            </span>const selector = document.getElementById('accountSelector');</p>
-<p class="p2"><span class="Apple-converted-space">            </span></p>
-<p class="p1"><span class="Apple-converted-space">            </span>// Keep default "Self" option, clear others</p>
-<p class="p1"><span class="Apple-converted-space">            </span>selector.innerHTML = '&lt;option value=""&gt;My Account (Self)&lt;/option&gt;';</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">            </span>dependents.forEach(dep =&gt; {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>const option = document.createElement('option');</p>
-<p class="p1"><span class="Apple-converted-space">                </span>option.value = dep.id;</p>
-<p class="p1"><span class="Apple-converted-space">                </span>option.textContent = `${dep.email} (${dep.permission_level} access)`;</p>
-<p class="p1"><span class="Apple-converted-space">                </span>selector.appendChild(option);</p>
-<p class="p1"><span class="Apple-converted-space">            </span>});</p>
-<p class="p1"><span class="Apple-converted-space">        </span>} catch (err) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>console.error('Could not load dependents:', err);</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 3. Handle Account Switcher Change</p>
-<p class="p1"><span class="Apple-converted-space">    </span>function handleAccountSwitch(targetId) {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>activeTargetAccountId = targetId ? parseInt(targetId) : null;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>loadActivationCode();</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 4. Save Carrier Preference</p>
-<p class="p1"><span class="Apple-converted-space">    </span>async function saveCarrier() {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const carrierName = document.getElementById('carrierSelect').value;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const targetId = activeTargetAccountId || currentUser.id;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>try {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>const response = await apiFetch('/api/user/carrier', {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>method: 'PUT',</p>
-<p class="p1"><span class="Apple-converted-space">                </span>body: JSON.stringify({ userId: targetId, carrierName })</p>
-<p class="p1"><span class="Apple-converted-space">            </span>});</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">            </span>if (response.ok) {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>alert('Carrier updated successfully!');</p>
-<p class="p1"><span class="Apple-converted-space">                </span>loadActivationCode();</p>
-<p class="p1"><span class="Apple-converted-space">            </span>} else {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>alert('Failed to update carrier.');</p>
-<p class="p1"><span class="Apple-converted-space">            </span>}</p>
-<p class="p1"><span class="Apple-converted-space">        </span>} catch (err) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>console.error('Error saving carrier:', err);</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 5. Fetch Forwarding Code for One-Tap Button</p>
-<p class="p1"><span class="Apple-converted-space">    </span>async function loadActivationCode() {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>if (!currentUser) return;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const targetId = activeTargetAccountId || currentUser.id;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>try {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>const response = await apiFetch(`/api/user/activation-code?userId=${targetId}`);</p>
-<p class="p1"><span class="Apple-converted-space">            </span>const data = await response.json();</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">            </span>const btn = document.getElementById('activateBtn');</p>
-<p class="p1"><span class="Apple-converted-space">            </span>if (response.ok &amp;&amp; data.telUri) {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>btn.href = data.telUri;</p>
-<p class="p1"><span class="Apple-converted-space">                </span>btn.classList.remove('hidden');</p>
-<p class="p1"><span class="Apple-converted-space">            </span>} else {</p>
-<p class="p1"><span class="Apple-converted-space">                </span>btn.classList.add('hidden');</p>
-<p class="p1"><span class="Apple-converted-space">            </span>}</p>
-<p class="p1"><span class="Apple-converted-space">        </span>} catch (err) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>console.error('Error fetching activation code:', err);</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 6. Initialize Dashboard View</p>
-<p class="p1"><span class="Apple-converted-space">    </span>function initDashboard(user) {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>currentUser = user;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>document.getElementById('loginSection').classList.add('hidden');</p>
-<p class="p1"><span class="Apple-converted-space">        </span>document.getElementById('dashboardSection').classList.remove('hidden');</p>
-<p class="p1"><span class="Apple-converted-space">        </span>document.getElementById('welcomeMsg').innerText = `Hello, ${user.name || user.email}`;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">        </span>if (user.carrierName) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>document.getElementById('carrierSelect').value = user.carrierName;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p2"><span class="Apple-converted-space">        </span></p>
-<p class="p1"><span class="Apple-converted-space">        </span>loadDependents();</p>
-<p class="p1"><span class="Apple-converted-space">        </span>loadActivationCode();</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// 7. Logout Session</p>
-<p class="p1"><span class="Apple-converted-space">    </span>function handleLogout() {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>localStorage.clear();</p>
-<p class="p1"><span class="Apple-converted-space">        </span>location.reload();</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">    </span>// Auto-login on load if token exists</p>
-<p class="p1"><span class="Apple-converted-space">    </span>window.onload = () =&gt; {</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const savedUser = localStorage.getItem('user');</p>
-<p class="p1"><span class="Apple-converted-space">        </span>const token = localStorage.getItem('token');</p>
-<p class="p1"><span class="Apple-converted-space">        </span>if (savedUser &amp;&amp; token) {</p>
-<p class="p1"><span class="Apple-converted-space">            </span>initDashboard(JSON.parse(savedUser));</p>
-<p class="p1"><span class="Apple-converted-space">        </span>}</p>
-<p class="p1"><span class="Apple-converted-space">    </span>};</p>
-<p class="p1">&lt;/script&gt;</p>
-<p class="p2"><br></p>
-<p class="p1">&lt;/body&gt;</p>
-<p class="p1">&lt;/html&gt;</p>
+
+<div class="container">
+  <h2>Call Shield Dashboard</h2>
+  <p style="color: #666; font-size: 14px;">Configure settings and activate protection below.</p>
+  
+  <!-- Guardian Account Switcher -->
+  <div class="account-switcher-box">
+    <label for="accountSelector" style="margin-top: 0;">Managing Account:</label>
+    <select id="accountSelector">
+      <option value="">My Account (Self)</option>
+    </select>
+  </div>
+
+  <label for="carrier">Mobile Carrier</label>
+  <select id="carrier">
+    <option value="verizon">Verizon / Visible</option>
+    <option value="att">AT&T / Cricket</option>
+    <option value="tmobile">T-Mobile / Mint / Metro</option>
+  </select>
+
+  <label for="passphrase">Voice Passphrase</label>
+  <input type="text" id="passphrase" placeholder="e.g. Pineapple">
+
+  <a href="#" id="activateBtn" class="btn-activate">Activate Call Shield</a>
+</div>
+
 </body>
 </html>
