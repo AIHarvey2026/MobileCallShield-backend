@@ -1211,6 +1211,50 @@ app.post('/api/carrier-settings', verifyAccountAccess, async (req, res) => {
     }
 });
 
+// Express route for account deactivation
+app.post('/api/user/deactivate', async (req, res) => {
+  const { userId, guardianPin } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+
+  try {
+    // 1. Check if the user has a primary guardian in your database
+    const userResult = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+
+    // 2. If a primary guardian is assigned, validate their PIN before deactivating
+    if (user.primary_guardian_id) {
+      if (!guardianPin) {
+        return res.status(401).json({ error: 'Primary Guardian PIN required' });
+      }
+      const guardianResult = await pool.query('SELECT * FROM guardians WHERE id = ? AND pin = ?', [user.primary_guardian_id, guardianPin]);
+      if (guardianResult.rows.length === 0) {
+        return res.status(401).json({ error: 'Incorrect Guardian PIN' });
+      }
+    }
+
+    // 3. Deactivate account in database (set is_active = false)
+    await pool.query('UPDATE users SET is_active = false WHERE id = ?', [userId]);
+
+    // Optional: Cancel Stripe subscription or clean up carrier call forwarding state here
+
+    res.json({
+      success: true,
+      message: 'Account successfully deactivated and subscription stopped.'
+    });
+
+  } catch (error) {
+    console.error('Deactivation error:', error);
+    res.status(500).json({ error: 'Internal server error during deactivation' });
+  }
+});
+
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
