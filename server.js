@@ -8,10 +8,12 @@ const rateLimit = require('express-rate-limit');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public'))); // Serves HTML, CSS, and JS from the 'public' folder
 
 // Configure Nodemailer Transporter (Declared ONLY ONCE)
 const transporter = nodemailer.createTransport({
@@ -192,6 +194,11 @@ app.get('/api/settings', async (req, res) => {
         console.error('Error fetching settings:', err);
         res.status(500).json({ error: 'Server error fetching settings.' });
     }
+});
+
+app.get('/', (req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.send(htmlContent); // Or your HTML string variable
 });
 
 // ==========================================
