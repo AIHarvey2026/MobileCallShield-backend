@@ -1,89 +1,106 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Call Shield Dashboard</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; }
-    .container { max-width: 480px; margin: 30px auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-    h2 { margin-top: 0; color: #1a1a1a; margin-bottom: 6px; }
-    p.subtitle { color: #666; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
-    label { display: block; margin-top: 15px; font-weight: 600; font-size: 14px; color: #444; }
-    select, button { width: 100%; padding: 14px; margin-top: 6px; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
-    
-    /* Prominent Carrier Selector Styling */
-    .carrier-box { background: #f4f7fa; border: 2px solid #007bff; padding: 16px; border-radius: 10px; margin-top: 10px; }
-    .carrier-label { font-size: 16px; font-weight: 700; color: #007bff; margin-top: 0; }
-    
-    .btn-activate { background: #28a745; color: white; border: none; font-weight: bold; text-align: center; display: block; line-height: 50px; border-radius: 8px; text-decoration: none; margin-top: 20px; cursor: pointer; font-size: 18px; }
-    .btn-activate:hover { background: #218838; }
-    .status-msg { margin-top: 15px; font-size: 14px; font-weight: 600; text-align: center; }
-    
-    /* Secondary Guardian Switcher */
-    .account-switcher-box { background: #fafafa; border: 1px dashed #ccc; padding: 10px 14px; border-radius: 8px; margin-top: 25px; }
-    .account-switcher-box label { font-size: 12px; color: #777; margin-top: 0; }
-    .account-switcher-box select { padding: 8px; font-size: 14px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Call Shield - Carrier Activation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #F2F2F7;
+            color: #000;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background: #ffffff;
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            margin-top: 20px;
+        }
+        h1 {
+            font-size: 22px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 8px;
+        }
+        p.subtitle {
+            font-size: 14px;
+            color: #6C6C70;
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .carrier-btn {
+            display: block;
+            width: 100%;
+            padding: 16px;
+            margin-bottom: 12px;
+            background-color: #007AFF;
+            color: white;
+            text-align: center;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 12px;
+            box-sizing: border-box;
+            transition: background-color 0.2s;
+        }
+        .carrier-btn:active {
+            background-color: #0056b3;
+        }
+        .troubleshoot-box {
+            margin-top: 24px;
+            padding: 16px;
+            background-color: #FFF3CD;
+            border: 1px solid #FFEEBA;
+            border-radius: 12px;
+            color: #856404;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+        .troubleshoot-box h3 {
+            font-size: 14px;
+            margin: 0 0 6px 0;
+            font-weight: 700;
+        }
+    </style>
 </head>
 <body>
 
-<div class="container">
-  <h2>Call Shield Activation</h2>
-  <p class="subtitle">Select your carrier to generate and dial your activation code.</p>
+    <div class="container">
+        <h1>Activate Call Protection</h1>
+        <p class="subtitle">Select your mobile carrier below to launch your phone dialer and activate conditional call forwarding.</p>
 
-  <!-- Instant Carrier Access -->
-  <div class="carrier-box">
-    <label for="carrier" class="carrier-label">1. Select Mobile Carrier</label>
-    <select id="carrier">
-      <option value="verizon">Verizon / Visible</option>
-      <option value="att">AT&T / Cricket</option>
-      <option value="tmobile">T-Mobile / Mint / Metro</option>
-    </select>
-  </div>
+        <!-- Carrier Activation Buttons (Dynamic URLs populated by backend) -->
+        <a href="#" id="verizon-link" class="carrier-btn">Verizon</a>
+        <a href="#" id="att-link" class="carrier-btn">AT&T</a>
+        <a href="#" id="tmobile-link" class="carrier-btn">T-Mobile / Other</a>
 
-  <a href="#" id="activateBtn" class="btn-activate" onclick="handleActivation(event)">2. Activate Call Shield</a>
+        <!-- Troubleshooting & MVNO Notice Box -->
+        <div class="troubleshoot-box">
+            <h3>Having trouble or using a budget carrier?</h3>
+            <p>Some prepaid carriers or MVNOs (like Mint Mobile, Cricket, or Consumer Cellular) do not support star code shortcuts.</p>
+            <p style="margin-bottom: 0;"><strong>Alternative:</strong> Contact your carrier's customer support and ask them to manually enable <em>Conditional Call Forwarding (Busy / No Answer)</em> to your Call Shield security number.</p>
+        </div>
+    </div>
 
-  <div id="statusMsg" class="status-msg"></div>
-
-  <!-- Guardian Account Switcher (Secondary) -->
-  <div class="account-switcher-box">
-    <label for="accountSelector">Managing Account / Line:</label>
-    <select id="accountSelector">
-      <option value="self">My Line (Self)</option>
-    </select>
-  </div>
-</div>
-
-<script>
-  async function handleActivation(event) {
-    event.preventDefault();
-    const carrier = document.getElementById('carrier').value;
-    const statusMsg = document.getElementById('statusMsg');
-
-    statusMsg.style.color = '#007bff';
-    statusMsg.innerText = 'Generating activation code...';
-
-    try {
-      const response = await fetch(`/api/user/activation-code?carrier=${encodeURIComponent(carrier)}`);
-      const data = await response.json();
-
-      if (data.dialCode || data.telUri) {
-        statusMsg.style.color = '#28a745';
-        statusMsg.innerText = `Dial Code: ${data.dialCode || data.telUri}. Opening dialer...`;
-        
-        window.location.href = data.telUri || `tel:${encodeURIComponent(data.dialCode)}`;
-      } else {
-        statusMsg.style.color = '#dc3545';
-        statusMsg.innerText = data.error || 'Failed to generate activation code.';
-      }
-    } catch (err) {
-      console.error('Activation Error:', err);
-      statusMsg.style.color = '#dc3545';
-      statusMsg.innerText = 'Error connecting to server.';
-    }
-  }
-</script>
+    <script>
+        // Fetches configuration and dynamic Twilio dial codes from your backend route
+        fetch('/api/activation-details')
+            .then(res => res.json())
+            .then(data => {
+                if (data.verizonUri) document.getElementById('verizon-link').href = data.verizonUri;
+                if (data.attUri) document.getElementById('att-link').href = data.attUri;
+                if (data.tmobileUri) document.getElementById('tmobile-link').href = data.tmobileUri;
+            })
+            .catch(err => console.error('Failed to load activation links', err));
+    </script>
 
 </body>
 </html>

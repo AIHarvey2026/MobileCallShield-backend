@@ -67,17 +67,25 @@ function getCarrierForwardingCode(carrier, twilioNumber) {
 // ONBOARDING ACTIVATION CODE ENDPOINT
 // ==========================================
 app.get('/api/user/activation-code', (req, res) => {
-  const { carrier } = req.query;
-  // Use your Twilio screening number from environment variables, with a fallback if needed
-  const twilioNumber = process.env.TWILIO_PHONE_NUMBER || '+15551234567'; 
+  const carrier = req.query.carrier;
+  const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER; // Must be your actual Twilio number (e.g., +15551234567)
 
-  const dialCode = getCarrierForwardingCode(carrier, twilioNumber);
+  let dialCode = '';
+ 
+  if (carrier === 'verizon') {
+    // Verizon conditional forwarding star code format: *71 + phone number
+    dialCode = `*71${twilioPhoneNumber}`;
+  } else if (carrier === 'att') {
+    // AT&T conditional forwarding star code format: *004* + phone number + #
+    dialCode = `*004*${twilioPhoneNumber}#`;
+  } else if (carrier === 'tmobile') {
+    // T-Mobile conditional forwarding format: **004* + phone number + #
+    dialCode = `**004*${twilioPhoneNumber}#`;
+  }
 
   res.json({
-    carrier: carrier || 'verizon',
-    twilioNumber: twilioNumber,
     dialCode: dialCode,
-    telUri: `tel:${encodeURIComponent(dialCode)}` // Pre-formatted link for mobile dialer
+    telUri: `tel:${encodeURIComponent(dialCode)}`
   });
 });
 
