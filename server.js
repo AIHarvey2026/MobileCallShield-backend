@@ -239,7 +239,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 });
 
 // ----------------------------------------------------
-// Account Deactivation Endpoint (Fixed PostgreSQL syntax)
+// Account Deactivation Endpoint
 // ----------------------------------------------------
 app.post('/api/user/deactivate', async (req, res) => {
   const { userId, guardianPin } = req.body;
@@ -279,6 +279,35 @@ app.post('/api/user/deactivate', async (req, res) => {
   }
 });
 
+// ----------------------------------------------------
+// Toggle Shield Status (Added for iOS & Android Parity)
+// ----------------------------------------------------
+app.put('/api/user/toggle-shield', async (req, res) => {
+    const { userId, isEnabled, pin } = req.body;
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is required.' });
+    }
+
+    try {
+        const userResult = await pool.query('SELECT pin, guardian_code FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        const dbPin = userResult.rows[0].guardian_code || userResult.rows[0].pin || '1234';
+
+        if (!isEnabled && pin && pin !== dbPin) {
+            return res.status(401).json({ success: false, error: 'Incorrect Guardian/Owner PIN.' });
+        }
+
+        await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
+        res.json({ success: true, message: `Shield status updated to ${isEnabled}` });
+    } catch (err) {
+        console.error('Error toggling shield:', err);
+        res.status(500).json({ error: 'Server error updating shield status.' });
+    }
+});
+
 app.post('/api/guardians/send-alert', async (req, res) => {
     const { userId, guardianPhone, alertMessage } = req.body;
     
@@ -298,36 +327,6 @@ app.post('/api/guardians/send-alert', async (req, res) => {
     } catch (err) {
         console.error('Error dispatching SMS alert via Twilio:', err);
         res.status(500).json({ error: 'Failed to send SMS alert.' });
-    }
-});
-
-// ----------------------------------------------------
-// Toggle Guardian Shield Status (With Optional PIN Verification)
-// ----------------------------------------------------
-app.put('/api/user/toggle-shield', async (req, res) => {
-    const { userId, isEnabled, pin } = req.body;
-    if (!userId) {
-        return res.status(400).json({ error: 'User ID is required.' });
-    }
-
-    try {
-        const userResult = await pool.query('SELECT pin, guardian_code FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found.' });
-        }
-
-        const dbPin = userResult.rows[0].guardian_code || userResult.rows[0].pin || '1234';
-
-        // If disabling the shield and a PIN was supplied, verify it
-        if (!isEnabled && pin && pin !== dbPin) {
-            return res.status(401).json({ success: false, error: 'Incorrect Guardian/Owner PIN.' });
-        }
-
-        await pool.query('UPDATE users SET is_call_shield_enabled = $1 WHERE id = $2', [isEnabled, userId]);
-        res.json({ success: true, message: `Shield status updated to ${isEnabled}` });
-    } catch (err) {
-        console.error('Error toggling shield:', err);
-        res.status(500).json({ error: 'Server error updating shield status.' });
     }
 });
 
@@ -537,7 +536,7 @@ app.post('/save-voicemail', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// Server Listen (Called ONLY ONCE at the very end)
+// Server Listen
 // ----------------------------------------------------
 app.listen(PORT, () => {
     console.log(`Mobile Call Shield server running on port ${PORT}`);
