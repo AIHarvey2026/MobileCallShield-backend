@@ -197,10 +197,12 @@ app.get('/api/settings', async (req, res) => {
     }
 });
 
+
+// Ensure this route uses res.sendFile so the browser renders the HTML correctly
 app.get('/', (req, res) => {
-    res.setHeader('Content-Type', 'text/html');
-    res.send(htmlContent); // Or your HTML string variable
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
 
 // ==========================================
 // 3. SECURITY MANAGEMENT ENDPOINTS
