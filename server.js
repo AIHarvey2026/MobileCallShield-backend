@@ -239,6 +239,60 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 });
 
 // ----------------------------------------------------
+// Guardian Management Endpoints
+// ----------------------------------------------------
+
+// 1. Get guardians for a user
+app.get('/api/guardians/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT id, name, phone_number as phoneNumber, relationship, pin 
+             FROM guardians WHERE user_id = $1`,
+            [userId]
+        );
+        res.status(200).json({ success: true, guardians: result.rows });
+    } catch (err) {
+        console.error('Error fetching guardians:', err);
+        res.status(500).json({ error: 'Server error fetching guardians.' });
+    }
+});
+
+// 2. Add or update a guardian
+app.post('/api/guardians', async (req, res) => {
+    const { userId, name, phoneNumber, relationship, pin } = req.body;
+    if (!userId || !name || !phoneNumber) {
+        return res.status(400).json({ error: 'User ID, name, and phone number are required.' });
+    }
+
+    try {
+        const result = await pool.query(
+            `INSERT INTO guardians (user_id, name, phone_number, relationship, pin)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id, name, phone_number as phoneNumber, relationship, pin`,
+            [userId, name, phoneNumber, relationship, pin || '1234']
+        );
+        res.status(201).json({ success: true, guardian: result.rows[0] });
+    } catch (err) {
+        console.error('Error creating guardian:', err);
+        res.status(500).json({ error: 'Server error creating guardian.' });
+    }
+});
+
+// 3. Delete a guardian
+app.delete('/api/guardians/:guardianId', async (req, res) => {
+    const { guardianId } = req.params;
+    try {
+        await pool.query('DELETE FROM guardians WHERE id = $1', [guardianId]);
+        res.status(200).json({ success: true, message: 'Guardian deleted successfully.' });
+    } catch (err) {
+        console.error('Error deleting guardian:', err);
+        res.status(500).json({ error: 'Server error deleting guardian.' });
+    }
+});
+
+
+// ----------------------------------------------------
 // Account Deactivation Endpoint
 // ----------------------------------------------------
 app.post('/api/user/deactivate', async (req, res) => {
