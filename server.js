@@ -261,15 +261,15 @@ if let array = try? JSONDecoder().decode([Guardian].self, from: data) {
 
 
 // 1. Get guardians for a user
+// 1. Get guardians for a user
 app.get('/api/guardians/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
         const result = await pool.query(
             `SELECT id, name, phone_number as phoneNumber, relationship, pin 
-             FROM guardians WHERE user_id = $1`,
+             FROM account_guardians WHERE user_id = $1`,
             [userId]
         );
-        // Return the array directly to match Swift's Decoder
         res.status(200).json(result.rows);
     } catch (err) {
         console.error('Error fetching guardians:', err);
@@ -286,7 +286,7 @@ app.post('/api/guardians', async (req, res) => {
 
     try {
         const result = await pool.query(
-            `INSERT INTO guardians (user_id, name, phone_number, relationship, pin)
+            `INSERT INTO account_guardians (user_id, name, phone_number, relationship, pin)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id, name, phone_number as phoneNumber, relationship, pin`,
             [userId, name, phoneNumber, relationship, pin || '1234']
@@ -302,14 +302,13 @@ app.post('/api/guardians', async (req, res) => {
 app.delete('/api/guardians/:guardianId', async (req, res) => {
     const { guardianId } = req.params;
     try {
-        await pool.query('DELETE FROM guardians WHERE id = $1', [guardianId]);
+        await pool.query('DELETE FROM account_guardians WHERE id = $1', [guardianId]);
         res.status(200).json({ success: true, message: 'Guardian deleted successfully.' });
     } catch (err) {
         console.error('Error deleting guardian:', err);
         res.status(500).json({ error: 'Server error deleting guardian.' });
     }
 });
-
 
 // ----------------------------------------------------
 // Account Deactivation Endpoint
