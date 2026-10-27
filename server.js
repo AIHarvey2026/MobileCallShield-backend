@@ -251,7 +251,8 @@ app.get('/api/guardians/:userId', async (req, res) => {
              FROM guardians WHERE user_id = $1`,
             [userId]
         );
-        res.status(200).json({ success: true, guardians: result.rows });
+        // Return the array directly to match Swift's Decoder
+        res.status(200).json(result.rows);
     } catch (err) {
         console.error('Error fetching guardians:', err);
         res.status(500).json({ error: 'Server error fetching guardians.' });
