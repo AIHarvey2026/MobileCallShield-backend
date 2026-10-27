@@ -238,17 +238,19 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
+
 // ----------------------------------------------------
 // Guardian Management Endpoints
 // ----------------------------------------------------
 
-// 1. Get guardians for a user
+// 1. Get guardians for a user (dependent)
 app.get('/api/guardians/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
         const result = await pool.query(
-            `SELECT id, name, phone_number as phoneNumber, relationship, pin 
-             FROM account_guardians WHERE user_id = $1`,
+            `SELECT ag.id, ag.guardian_user_id as guardianUserId, ag.permission_level as relationship, ag.created_at as createdAt
+             FROM account_guardians ag
+             WHERE ag.dependent_user_id = $1`,
             [userId]
         );
         res.status(200).json(result.rows);
@@ -258,19 +260,19 @@ app.get('/api/guardians/:userId', async (req, res) => {
     }
 });
 
-// 2. Add or update a guardian
+// 2. Add a guardian relationship
 app.post('/api/guardians', async (req, res) => {
-    const { userId, name, phoneNumber, relationship, pin } = req.body;
-    if (!userId || !name || !phoneNumber) {
-        return res.status(400).json({ error: 'User ID, name, and phone number are required.' });
+    const { dependentUserId, guardianUserId, permissionLevel } = req.body;
+    if (!dependentUserId || !guardianUserId) {
+        return res.status(400).json({ error: 'Dependent User ID and Guardian User ID are required.' });
     }
 
     try {
         const result = await pool.query(
-            `INSERT INTO account_guardians (user_id, name, phone_number, relationship, pin)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING id, name, phone_number as phoneNumber, relationship, pin`,
-            [userId, name, phoneNumber, relationship, pin || '1234']
+            `INSERT INTO account_guardians (dependent_user_id, guardian_user_id, permission_level)
+             VALUES ($1, $2, $3)
+             RETURNING id, dependent_user_id as dependentUserId, guardian_user_id as guardianUserId, permission_level as relationship`,
+            [dependentUserId, guardianUserId, permissionLevel || 'full']
         );
         res.status(201).json({ success: true, guardian: result.rows[0] });
     } catch (err) {
@@ -279,7 +281,7 @@ app.post('/api/guardians', async (req, res) => {
     }
 });
 
-// 3. Delete a guardian
+// 3. Delete a guardian relationship
 app.delete('/api/guardians/:guardianId', async (req, res) => {
     const { guardianId } = req.params;
     try {
