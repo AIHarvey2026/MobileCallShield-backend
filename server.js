@@ -242,6 +242,24 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 // Guardian Management Endpoints
 // ----------------------------------------------------
 
+// Option A: If decoding into a wrapper struct first
+struct GuardiansResponse: Codable {
+    let success: Bool?
+    let guardians: [Guardian]?
+}
+
+
+if let array = try? JSONDecoder().decode([Guardian].self, from: data) {
+    // Successfully decoded as an array
+    self.guardians = array
+} else if let response = try? JSONDecoder().decode(GuardiansWrapper.self, from: data) {
+    // Decoded as a dictionary wrapper
+    self.guardians = response.guardians ?? []
+}
+
+
+
+
 // 1. Get guardians for a user
 app.get('/api/guardians/:userId', async (req, res) => {
     const { userId } = req.params;
