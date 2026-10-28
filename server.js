@@ -20,6 +20,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(express.json());
 
+// Add the profanity filter package import here:
+const { profanity } = require('@2toad/profanity');
+
+
 // Trust reverse proxy (Render) for express-rate-limit
 app.set('trust proxy', 1);
 
@@ -88,6 +92,8 @@ function toE164(raw) {
     return null;
 }
 
+// ... existing phone helpers ...
+
 function normalizeIncomingPhone(rawFrom) {
     if (!rawFrom) return null;
     const digitsOnly = rawFrom.replace(/\D/g, '');
@@ -95,6 +101,64 @@ function normalizeIncomingPhone(rawFrom) {
     if (tenDigits.length !== 10) return rawFrom;
     return `(${tenDigits.slice(0, 3)}) ${tenDigits.slice(3, 6)}-${tenDigits.slice(6)}`;
 }
+
+// ----------------------------------------------------
+// Message Name Validation & Profanity Sanitizer
+// ----------------------------------------------------
+function sanitizeAndValidateMessageName(nameInput) {
+    // 1. Convert blank or whitespace-only inputs to null
+    if (!nameInput || nameInput.trim() === '') {
+        return null;
+    }
+    
+    const cleanName = nameInput.trim();
+    
+    // 2. Reject names containing bad words
+    if (profanity.exists(cleanName)) {
+        throw new Error('Message name contains inappropriate language. Please choose a different name.');
+    }
+    
+    return cleanName;
+}
+
+// ----------------------------------------------------
+// Update Message Name Endpoint (For User Settings / Profile)
+// ----------------------------------------------------
+app.post('/api/user/update-message-name', async (req, res) => {
+    const { userId, rawMessageName } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ success: false, error: 'User ID is required.' });
+    }
+
+    try {
+        // Run validation check (converts empty to null, throws error if profane)
+        const sanitizedName = sanitizeAndValidateMessageName(rawMessageName);
+
+        // Save sanitized name (or null) to database
+        const result = await pool.query(
+            'UPDATE users SET message_name = $1 WHERE id = $2 RETURNING id, message_name',
+            [sanitizedName, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'User not found.' });
+        }
+
+        res.json({
+            success: true,
+            message: sanitizedName 
+                ? `Greeting name updated to "${sanitizedName}".` 
+                : 'Greeting name cleared. Calls will use the default privacy message.',
+            messageName: sanitizedName
+        });
+    } catch (err) {
+        // Return 400 if profanity error was caught
+        console.error('Error updating message name:', err);
+        res.status(400).json({ success: false, error: err.message || 'Failed to update message name.' });
+    }
+});
+
 
 // Nodemailer Transporter
 const transporter = nodemailer.createTransport({
@@ -119,8 +183,9 @@ app.get('/', (req, res) => {
 // ----------------------------------------------------
 // Authentication & Setup Routes
 // ----------------------------------------------------
+
 app.post('/api/auth/register', authLimiter, async (req, res) => {
-    const { name, phoneNumber, email, password, pin, passcode } = req.body;
+    const { name, phoneNumber, email, password, pin, passcode, messageName } = req.body;
     if (!password || !email || !pin) {
         return res.status(400).json({ error: 'Email, password, and PIN are required.' });
     }
@@ -129,6 +194,15 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+
+        // Sanitize and validate message_name (throws error if profane, returns null if blank)
+        let sanitizedMessageName = null;
+        try {
+            sanitizedMessageName = sanitizeAndValidateMessageName(messageName);
+        } catch (validationErr) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: validationErr.message });
+        }
 
         const existingUser = await client.query(
             'SELECT id FROM users WHERE ($1::text IS NOT NULL AND owner_phone = $1) OR email = $2',
@@ -145,11 +219,12 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
+        // Insert including message_name
         const newUser = await client.query(
-            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, subscription_status, trial_ends_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'trialing', $7, NOW())
-             RETURNING id, user_name, owner_phone, email, passcode, subscription_status`,
-            [name || email, realPhone, email, passwordHash, pin, userPasscode, trialEnd]
+            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, message_name, subscription_status, trial_ends_at, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'trialing', $8, NOW())
+             RETURNING id, user_name, owner_phone, email, passcode, message_name, subscription_status`,
+            [name || email, realPhone, email, passwordHash, pin, userPasscode, sanitizedMessageName, trialEnd]
         );
 
         const newUserId = newUser.rows[0].id;
@@ -183,6 +258,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 assignedTwilioNumber: assignedPhoneNumber,
                 email: newUser.rows[0].email,
                 passcode: newUser.rows[0].passcode,
+                messageName: newUser.rows[0].message_name,
                 subscriptionStatus: newUser.rows[0].subscription_status
             }
         });
@@ -195,6 +271,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     }
 });
 
+// Login Code
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -403,6 +480,9 @@ app.post('/whisper', (req, res) => {
     res.send(twiml.toString());
 });
 
+// ====================================================
+// 1. UPDATED VOICE WEBHOOK (WITH message_name SUPPORT)
+// ====================================================
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     const rawCallerId = req.body.From;
@@ -410,15 +490,24 @@ app.post('/voice', async (req, res) => {
     
     const twiml = new VoiceResponse();
     try {
+        // Query message_name instead of user_name
         const userResult = await pool.query(`
-            SELECT u.id, u.user_name, u.owner_phone, u.is_call_shield_enabled
+            SELECT u.id, u.message_name, u.owner_phone, u.is_call_shield_enabled
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
 
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
-            const userName = user.user_name || 'the account holder';
+            const announcedName = user.message_name || null;
+
+            // Build dynamic prompt based on whether message_name is set or NULL
+            let greetingPrompt = '';
+            if (announcedName) {
+                greetingPrompt = `Hello! This call is protected by Mobile Call Shield for ${announcedName}. Please enter your guardian PIN or passcode to continue.`;
+            } else {
+                greetingPrompt = `Hello! This call is protected by Mobile Call Shield. Please enter your guardian PIN or passcode to continue.`;
+            }
 
             const dialUser = (twimlResponse) => {
                 const protocol = req.headers['x-forwarded-proto'] || 'https';
@@ -467,7 +556,7 @@ app.post('/voice', async (req, res) => {
                 timeout: 5,
                 speechTimeout: 'auto'
             });
-            gather.say({ voice: 'Polly.Joanna-Neural' }, `Hello! This call is protected by Mobile Call Shield for ${userName}. Please enter your guardian PIN or passcode to continue.`);
+            gather.say({ voice: 'Polly.Joanna-Neural' }, greetingPrompt);
             
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive any input. Goodbye.');
             twiml.hangup();
@@ -484,7 +573,10 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Voicemail Greeting Handler
+
+// ====================================================
+// 2. UPDATED VOICEMAIL GREETING HANDLER
+// ====================================================
 app.post('/handle-voicemail', async (req, res) => {
     const dialStatus = req.body.DialCallStatus;
     const twilioNumber = req.body.To;
@@ -492,15 +584,20 @@ app.post('/handle-voicemail', async (req, res) => {
 
     try {
         const userResult = await pool.query(`
-            SELECT u.user_name 
+            SELECT u.message_name 
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
 
-        const userName = userResult.rows.length > 0 ? (userResult.rows[0].user_name || 'The user') : 'The user';
+        const messageName = userResult.rows.length > 0 ? userResult.rows[0].message_name : null;
+        
+        // Use message_name if available, else use privacy fallback
+        const unavailabilityPrompt = messageName 
+            ? `${messageName} is currently unavailable. Please leave a message after the tone.` 
+            : `The user is currently unavailable. Please leave a message after the tone.`;
 
         if (dialStatus !== 'completed') {
-            twiml.say({ voice: 'Polly.Joanna-Neural' }, `${userName} is currently unavailable. Please leave a message after the tone.`);
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, unavailabilityPrompt);
             twiml.record({
                 action: '/save-recording',
                 method: 'POST',
@@ -528,7 +625,10 @@ app.post('/handle-voicemail', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Save Recording & Send Notification
+
+// ====================================================
+// 3. SAVE RECORDING & SEND NOTIFICATION
+// ====================================================
 app.post('/save-recording', async (req, res) => {
     const recordingUrl = req.body.RecordingUrl;
     const callerNumber = req.body.From;
@@ -537,23 +637,21 @@ app.post('/save-recording', async (req, res) => {
     console.log(`New voicemail received from ${callerNumber} on ${calledNumber}: ${recordingUrl}`);
 
     try {
-        // 1. Look up owner info using user_name instead of name
         const userResult = await pool.query(`
-            SELECT u.owner_phone, u.user_name, u.sms_notifications_enabled 
+            SELECT u.owner_phone, u.message_name, u.sms_notifications_enabled 
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [calledNumber]);
 
         if (userResult.rows.length > 0) {
-            const { owner_phone, user_name, sms_notifications_enabled } = userResult.rows[0];
-            const userName = user_name || 'you';
+            const { owner_phone, message_name, sms_notifications_enabled } = userResult.rows[0];
+            const recipientName = message_name || 'you';
 
-            // 2. Send SMS if enabled
             const sendSms = sms_notifications_enabled === true || sms_notifications_enabled === null;
 
             if (owner_phone && sendSms && typeof client !== 'undefined') {
                 await client.messages.create({
-                    body: `Mobile Call Shield: New voicemail from ${callerNumber} for ${userName}. Listen here: ${recordingUrl}`,
+                    body: `Mobile Call Shield: New voicemail from ${callerNumber} for ${recipientName}. Listen here: ${recordingUrl}`,
                     to: owner_phone,
                     from: calledNumber
                 });
@@ -566,7 +664,6 @@ app.post('/save-recording', async (req, res) => {
         console.error('Error handling voicemail notification:', err);
     }
 
-    // 3. Play confirmation and send XML response
     const twiml = new VoiceResponse();
     twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Thank you. Your message has been saved. Goodbye.');
     twiml.hangup();
