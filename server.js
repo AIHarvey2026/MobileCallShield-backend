@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 const bodyParser = require('body-parser');
 
+
 // 1. Initialize Express FIRST
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -100,6 +101,27 @@ function normalizeIncomingPhone(rawFrom) {
     const tenDigits = digitsOnly.slice(-10);
     if (tenDigits.length !== 10) return rawFrom;
     return `(${tenDigits.slice(0, 3)}) ${tenDigits.slice(3, 6)}-${tenDigits.slice(6)}`;
+}
+
+// -----------------------------------------------------------------------------------------
+// 1. JWT Authentication Middleware (Place this higher up in server.js, before your routes)
+// -----------------------------------------------------------------------------------------
+
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer <token>
+    
+    if (!token) {
+        return res.status(401).json({ success: false, error: 'Access token required.' });
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret_key', (err, user) => {
+        if (err) {
+            return res.status(403).json({ success: false, error: 'Invalid or expired token.' });
+        }
+        req.user = user;
+        next();
+    });
 }
 
 // ----------------------------------------------------
@@ -463,7 +485,7 @@ app.post('/api/guardians/send-alert', async (req, res) => {
 })
 
 // ----------------------------------------------------
-// Adminstration Section
+// Administration Section
 // ----------------------------------------------------
 
 
