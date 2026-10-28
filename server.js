@@ -423,23 +423,26 @@ app.post('/voice', async (req, res) => {
     const twiml = new VoiceResponse();
     try {
         const userResult = await pool.query(`
-            SELECT u.id, u.owner_phone, u.is_call_shield_enabled
+            SELECT u.id, u.name, u.owner_phone, u.is_call_shield_enabled
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
 
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
+            const userName = user.name || 'the account holder';
 
             const dialUser = (twimlResponse) => {
                 const protocol = req.headers['x-forwarded-proto'] || 'https';
                 const whisperUrl = `${protocol}://${req.headers.host}/whisper`;
+                const voicemailUrl = `${protocol}://${req.headers.host}/handle-voicemail`;
 
                 const dial = twimlResponse.dial({
                     callerId: twilioNumber,
                     answerOnBridge: true,
                     timeout: 20,
-                    timeLimit: 900
+                    timeLimit: 900,
+                    action: voicemailUrl // Triggers if owner misses the call
                 });
                 dial.number({ url: whisperUrl }, user.owner_phone);
             };
@@ -476,7 +479,7 @@ app.post('/voice', async (req, res) => {
                 timeout: 5,
                 speechTimeout: 'auto'
             });
-            gather.say({ voice: 'Polly.Joanna-Neural' }, 'Hello! Please state your name or passcode after the tone.');
+            gather.say({ voice: 'Polly.Joanna-Neural' }, `Hello! This call is protected by Mobile Call Shield for ${userName}. Please enter your guardian PIN or passcode to continue.`);
             
             twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive any input. Goodbye.');
             twiml.hangup();
@@ -489,6 +492,101 @@ app.post('/voice', async (req, res) => {
     }
     twiml.say({ voice: 'Polly.Joanna-Neural' }, 'No active account found. Goodbye.');
     twiml.hangup();
+    res.type('text/xml');
+    res.send(twiml.toString());
+});
+
+// Voicemail 
+app.post('/handle-voicemail', async (req, res) => {
+    const dialStatus = req.body.DialCallStatus; // 'no-answer', 'busy', 'failed', etc.
+    const twilioNumber = req.body.To;
+    const twiml = new VoiceResponse();
+
+    try {
+        // Look up the user's name using the dialed virtual number
+        const userResult = await pool.query(`
+            SELECT u.name 
+            FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
+            WHERE pn.phone_number = $1 AND pn.is_active = true
+        `, [twilioNumber]);
+
+        const userName = userResult.rows.length > 0 ? (userResult.rows[0].name || 'The user') : 'The user';
+
+        // If the owner did not pick up the call
+        if (dialStatus !== 'completed') {
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, `${userName} is currently unavailable. Please leave a message after the tone.`);
+            twiml.record({
+                action: '/save-recording',
+                method: 'POST',
+                maxLength: 120, // Max recording length in seconds (2 minutes)
+                playBeep: true,
+                finishOnKey: '#'
+            });
+            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive a recording. Goodbye.');
+        } else {
+            twiml.hangup();
+        }
+    } catch (err) {
+        console.error('Error handling voicemail greeting:', err);
+        twiml.say({ voice: 'Polly.Joanna-Neural' }, 'The user is currently unavailable. Please leave a message after the tone.');
+        twiml.record({
+            action: '/save-recording',
+            method: 'POST',
+            maxLength: 120,
+            playBeep: true,
+            finishOnKey: '#'
+        });
+    }
+
+    res.type('text/xml');
+    res.send(twiml.toString());
+});
+
+
+//Save Recording
+app.post('/save-recording', async (req, res) => {
+    const recordingUrl = req.body.RecordingUrl;
+    const callerNumber = req.body.From;
+    const calledNumber = req.body.To;
+    const recordingSid = req.body.RecordingSid;
+
+    console.log(`New voicemail received from ${callerNumber} on ${calledNumber}: ${recordingUrl}`);
+
+    try {
+        // 1. Look up owner info AND check if SMS notifications are enabled (default to true if column doesn't exist yet)
+        const userResult = await pool.query(`
+            SELECT u.owner_phone, u.name, u.sms_notifications_enabled 
+            FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
+            WHERE pn.phone_number = $1 AND pn.is_active = true
+        `, [calledNumber]);
+
+        if (userResult.rows.length > 0) {
+            const { owner_phone, name, sms_notifications_enabled } = userResult.rows[0];
+            const userName = name || 'you';
+
+            // 2. Only send SMS if owner_phone exists AND SMS notifications are enabled (or null/undefined)
+            const sendSms = sms_notifications_enabled === true || sms_notifications_enabled === null;
+
+            if (owner_phone && sendSms && typeof client !== 'undefined') {
+                await client.messages.create({
+                    body: `Mobile Call Shield: New voicemail from ${callerNumber} for ${userName}. Listen here: ${recordingUrl}`,
+                    to: owner_phone,
+                    from: calledNumber
+                });
+                console.log(`Voicemail SMS notification successfully sent to ${owner_phone}`);
+            } else {
+                console.log(`Voicemail received, but SMS notifications are disabled for this user.`);
+            }
+        }
+    } catch (err) {
+        console.error('Error handling voicemail notification:', err);
+    }
+
+    // 3. Play a polite confirmation message to the caller and hang up
+    const twiml = new VoiceResponse();
+    twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Thank you. Your message has been saved. Goodbye.');
+    twiml.hangup();
+
     res.type('text/xml');
     res.send(twiml.toString());
 });
