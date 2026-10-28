@@ -383,7 +383,8 @@ app.post('/api/guardians/send-alert', async (req, res) => {
         console.error('Error dispatching SMS alert via Twilio:', err);
         res.status(500).json({ error: 'Failed to send SMS alert.' });
     }
-});
+})
+
 
 // ----------------------------------------------------
 // Twilio Call Screening Webhooks
@@ -402,19 +403,6 @@ app.post('/whisper', (req, res) => {
     res.send(twiml.toString());
 });
 
-app.post('/process-whisper', (req, res) => {
-    const twiml = new VoiceResponse();
-    const digit = req.body.Digits;
-
-    if (digit === '1') {
-        twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Connecting now.');
-    } else {
-        twiml.hangup();
-    }
-    res.type('text/xml');
-    res.send(twiml.toString());
-});
-
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     const rawCallerId = req.body.From;
@@ -423,14 +411,14 @@ app.post('/voice', async (req, res) => {
     const twiml = new VoiceResponse();
     try {
         const userResult = await pool.query(`
-            SELECT u.id, u.name, u.owner_phone, u.is_call_shield_enabled
+            SELECT u.id, u.user_name, u.owner_phone, u.is_call_shield_enabled
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
 
         if (userResult.rows.length > 0) {
             const user = userResult.rows[0];
-            const userName = user.name || 'the account holder';
+            const userName = user.user_name || 'the account holder';
 
             const dialUser = (twimlResponse) => {
                 const protocol = req.headers['x-forwarded-proto'] || 'https';
@@ -442,7 +430,7 @@ app.post('/voice', async (req, res) => {
                     answerOnBridge: true,
                     timeout: 20,
                     timeLimit: 900,
-                    action: voicemailUrl // Triggers if owner misses the call
+                    action: voicemailUrl
                 });
                 dial.number({ url: whisperUrl }, user.owner_phone);
             };
@@ -496,29 +484,27 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Voicemail 
+// Voicemail Greeting Handler
 app.post('/handle-voicemail', async (req, res) => {
-    const dialStatus = req.body.DialCallStatus; // 'no-answer', 'busy', 'failed', etc.
+    const dialStatus = req.body.DialCallStatus;
     const twilioNumber = req.body.To;
     const twiml = new VoiceResponse();
 
     try {
-        // Look up the user's name using the dialed virtual number
         const userResult = await pool.query(`
-            SELECT u.name 
+            SELECT u.user_name 
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [twilioNumber]);
 
-        const userName = userResult.rows.length > 0 ? (userResult.rows[0].name || 'The user') : 'The user';
+        const userName = userResult.rows.length > 0 ? (userResult.rows[0].user_name || 'The user') : 'The user';
 
-        // If the owner did not pick up the call
         if (dialStatus !== 'completed') {
             twiml.say({ voice: 'Polly.Joanna-Neural' }, `${userName} is currently unavailable. Please leave a message after the tone.`);
             twiml.record({
                 action: '/save-recording',
                 method: 'POST',
-                maxLength: 120, // Max recording length in seconds (2 minutes)
+                maxLength: 120,
                 playBeep: true,
                 finishOnKey: '#'
             });
@@ -542,29 +528,27 @@ app.post('/handle-voicemail', async (req, res) => {
     res.send(twiml.toString());
 });
 
-
-//Save Recording
+// Save Recording & Send Notification
 app.post('/save-recording', async (req, res) => {
     const recordingUrl = req.body.RecordingUrl;
     const callerNumber = req.body.From;
     const calledNumber = req.body.To;
-    const recordingSid = req.body.RecordingSid;
 
     console.log(`New voicemail received from ${callerNumber} on ${calledNumber}: ${recordingUrl}`);
 
     try {
-        // 1. Look up owner info AND check if SMS notifications are enabled (default to true if column doesn't exist yet)
+        // 1. Look up owner info using user_name instead of name
         const userResult = await pool.query(`
-            SELECT u.owner_phone, u.name, u.sms_notifications_enabled 
+            SELECT u.owner_phone, u.user_name, u.sms_notifications_enabled 
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
             WHERE pn.phone_number = $1 AND pn.is_active = true
         `, [calledNumber]);
 
         if (userResult.rows.length > 0) {
-            const { owner_phone, name, sms_notifications_enabled } = userResult.rows[0];
-            const userName = name || 'you';
+            const { owner_phone, user_name, sms_notifications_enabled } = userResult.rows[0];
+            const userName = user_name || 'you';
 
-            // 2. Only send SMS if owner_phone exists AND SMS notifications are enabled (or null/undefined)
+            // 2. Send SMS if enabled
             const sendSms = sms_notifications_enabled === true || sms_notifications_enabled === null;
 
             if (owner_phone && sendSms && typeof client !== 'undefined') {
@@ -582,7 +566,7 @@ app.post('/save-recording', async (req, res) => {
         console.error('Error handling voicemail notification:', err);
     }
 
-    // 3. Play a polite confirmation message to the caller and hang up
+    // 3. Play confirmation and send XML response
     const twiml = new VoiceResponse();
     twiml.say({ voice: 'Polly.Joanna-Neural' }, 'Thank you. Your message has been saved. Goodbye.');
     twiml.hangup();
