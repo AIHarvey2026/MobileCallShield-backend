@@ -462,6 +462,28 @@ app.post('/api/guardians/send-alert', async (req, res) => {
     }
 })
 
+// ----------------------------------------------------
+// Adminstration Section
+// ----------------------------------------------------
+
+
+// Get all users for Admin Dashboard
+app.get('/api/admin/users', authenticateToken, async (req, res) => {
+    try {
+        // Ensure only admins can access this
+        if (!req.user.is_admin && req.user.role !== 'admin') {
+            return res.status(403).json({ success: false, error: 'Access denied. Admins only.' });
+        }
+
+        const result = await pool.query('SELECT id, user_name AS name, owner_phone AS phone_number, email, role, is_admin FROM users ORDER BY id ASC');
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching admin users:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+});
+
+
 
 // ----------------------------------------------------
 // Twilio Call Screening Webhooks
