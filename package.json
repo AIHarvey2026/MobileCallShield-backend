@@ -9,6 +9,7 @@
     "seed": "node seed-numbers.js"
   },
   "dependencies": {
+    "@2toad/profanity": "^3.3.0",
     "bcrypt": "^5.1.1",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
