@@ -9,32 +9,16 @@ const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const bodyParser = require('body-parser');
-
+const { profanity } = require('@2toad/profanity');
 
 // 1. Initialize Express FIRST
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 2. Middleware & Static Files
-app.use(express.static('public'));
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(express.json());
-
-// Add the profanity filter package import here:
-const { profanity } = require('@2toad/profanity');
-
-
 // Trust reverse proxy (Render) for express-rate-limit
 app.set('trust proxy', 1);
 
-// Configuration
-const TWILIO_NUMBER = process.env.TWILIO_PHONE_NUMBER || '+18005550199';
-const { VoiceResponse } = twilio.twiml;
-
-// ----------------------------------------------------
-// Database Connection (PostgreSQL on Render)
-// ----------------------------------------------------
+// 2. Database Connection (PostgreSQL on Render)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
@@ -42,9 +26,17 @@ const pool = new Pool({
     }
 });
 
-// ----------------------------------------------------
+// 3. Global Middleware & Static Files
+app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(express.json());
+
+// Configuration & Constants
+const TWILIO_NUMBER = process.env.TWILIO_PHONE_NUMBER || '+18005550199';
+const { VoiceResponse } = twilio.twiml;
+
 // CORS Configuration
-// ----------------------------------------------------
 const allowedOrigins = [
     'https://mobilecallshield.com',
     'https://www.mobilecallshield.com',
@@ -73,8 +65,17 @@ const authLimiter = rateLimit({
     }
 });
 
+// Nodemailer Transporter
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
 // ----------------------------------------------------
-// JWT Helpers
+// JWT & Helper Functions
 // ----------------------------------------------------
 function signToken(user) {
     if (!process.env.JWT_SECRET) {
@@ -93,8 +94,6 @@ function toE164(raw) {
     return null;
 }
 
-// ... existing phone helpers ...
-
 function normalizeIncomingPhone(rawFrom) {
     if (!rawFrom) return null;
     const digitsOnly = rawFrom.replace(/\D/g, '');
@@ -103,14 +102,24 @@ function normalizeIncomingPhone(rawFrom) {
     return `(${tenDigits.slice(0, 3)}) ${tenDigits.slice(3, 6)}-${tenDigits.slice(6)}`;
 }
 
-// -----------------------------------------------------------------------------------------
-// 1. JWT Authentication Middleware (Place this higher up in server.js, before your routes)
-// -----------------------------------------------------------------------------------------
+function sanitizeAndValidateMessageName(nameInput) {
+    if (!nameInput || nameInput.trim() === '') {
+        return null;
+    }
+    const cleanName = nameInput.trim();
+    if (profanity.exists(cleanName)) {
+        throw new Error('Message name contains inappropriate language. Please choose a different name.');
+    }
+    return cleanName;
+}
 
-function authenticateToken(req, res, next) {
+// -----------------------------------------------------------------------------------------
+// 4. JWT Authentication Middleware
+// -----------------------------------------------------------------------------------------
+const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer <token>
-    
+    const token = authHeader && authHeader.split(' ')[1]; // Expects "Bearer <token>"
+   
     if (!token) {
         return res.status(401).json({ success: false, error: 'Access token required.' });
     }
@@ -122,77 +131,10 @@ function authenticateToken(req, res, next) {
         req.user = user;
         next();
     });
-}
+};
 
 // ----------------------------------------------------
-// Message Name Validation & Profanity Sanitizer
-// ----------------------------------------------------
-function sanitizeAndValidateMessageName(nameInput) {
-    // 1. Convert blank or whitespace-only inputs to null
-    if (!nameInput || nameInput.trim() === '') {
-        return null;
-    }
-    
-    const cleanName = nameInput.trim();
-    
-    // 2. Reject names containing bad words
-    if (profanity.exists(cleanName)) {
-        throw new Error('Message name contains inappropriate language. Please choose a different name.');
-    }
-    
-    return cleanName;
-}
-
-// ----------------------------------------------------
-// Update Message Name Endpoint (For User Settings / Profile)
-// ----------------------------------------------------
-app.post('/api/user/update-message-name', async (req, res) => {
-    const { userId, rawMessageName } = req.body;
-
-    if (!userId) {
-        return res.status(400).json({ success: false, error: 'User ID is required.' });
-    }
-
-    try {
-        // Run validation check (converts empty to null, throws error if profane)
-        const sanitizedName = sanitizeAndValidateMessageName(rawMessageName);
-
-        // Save sanitized name (or null) to database
-        const result = await pool.query(
-            'UPDATE users SET message_name = $1 WHERE id = $2 RETURNING id, message_name',
-            [sanitizedName, userId]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ success: false, error: 'User not found.' });
-        }
-
-        res.json({
-            success: true,
-            message: sanitizedName 
-                ? `Greeting name updated to "${sanitizedName}".` 
-                : 'Greeting name cleared. Calls will use the default privacy message.',
-            messageName: sanitizedName
-        });
-    } catch (err) {
-        // Return 400 if profanity error was caught
-        console.error('Error updating message name:', err);
-        res.status(400).json({ success: false, error: err.message || 'Failed to update message name.' });
-    }
-});
-
-
-// Nodemailer Transporter
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    }
-});
-
-// ----------------------------------------------------
-// Core Routes
+// 5. Core Routes
 // ----------------------------------------------------
 app.get('/health', (req, res) => {
     res.status(200).send('Mobile Call Shield Backend is active and healthy.');
@@ -203,9 +145,26 @@ app.get('/', (req, res) => {
 });
 
 // ----------------------------------------------------
+// Administration Section (Protected)
+// ----------------------------------------------------
+app.get('/api/admin/users', authenticateToken, async (req, res) => {
+    try {
+        const userCheck = await pool.query('SELECT is_admin FROM users WHERE id = $1', [req.user.id]);
+        if (userCheck.rows.length === 0 || !userCheck.rows[0].is_admin) {
+            return res.status(403).json({ success: false, error: 'Access denied. Admins only.' });
+        }
+
+        const result = await pool.query('SELECT id, user_name AS name, owner_phone AS phone_number, email, role, is_admin FROM users ORDER BY id ASC');
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching admin users:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+});
+
+// ----------------------------------------------------
 // Authentication & Setup Routes
 // ----------------------------------------------------
-
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     const { name, phoneNumber, email, password, pin, passcode, messageName } = req.body;
     if (!password || !email || !pin) {
@@ -217,7 +176,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Sanitize and validate message_name (throws error if profane, returns null if blank)
         let sanitizedMessageName = null;
         try {
             sanitizedMessageName = sanitizeAndValidateMessageName(messageName);
@@ -241,7 +199,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
-        // Insert including message_name
         const newUser = await client.query(
             `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, message_name, subscription_status, trial_ends_at, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'trialing', $8, NOW())
@@ -293,7 +250,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     }
 });
 
-// Login Code
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -337,64 +293,41 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
-
 // ----------------------------------------------------
-// Guardian Management Endpoints
+// User Settings & Profile
 // ----------------------------------------------------
+app.post('/api/user/update-message-name', async (req, res) => {
+    const { userId, rawMessageName } = req.body;
 
-// 1. Get guardians for a user (dependent)
-app.get('/api/guardians/:userId', async (req, res) => {
-    const { userId } = req.params;
+    if (!userId) {
+        return res.status(400).json({ success: false, error: 'User ID is required.' });
+    }
+
     try {
+        const sanitizedName = sanitizeAndValidateMessageName(rawMessageName);
+
         const result = await pool.query(
-            `SELECT ag.id, ag.guardian_user_id as guardianUserId, ag.permission_level as relationship, ag.created_at as createdAt
-             FROM account_guardians ag
-             WHERE ag.dependent_user_id = $1`,
-            [userId]
+            'UPDATE users SET message_name = $1 WHERE id = $2 RETURNING id, message_name',
+            [sanitizedName, userId]
         );
-        res.status(200).json(result.rows);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'User not found.' });
+        }
+
+        res.json({
+            success: true,
+            message: sanitizedName 
+                ? `Greeting name updated to "${sanitizedName}".` 
+                : 'Greeting name cleared. Calls will use the default privacy message.',
+            messageName: sanitizedName
+        });
     } catch (err) {
-        console.error('Error fetching guardians:', err);
-        res.status(500).json({ error: 'Server error fetching guardians.' });
+        console.error('Error updating message name:', err);
+        res.status(400).json({ success: false, error: err.message || 'Failed to update message name.' });
     }
 });
 
-// 2. Add a guardian relationship
-app.post('/api/guardians', async (req, res) => {
-    const { dependentUserId, guardianUserId, permissionLevel } = req.body;
-    if (!dependentUserId || !guardianUserId) {
-        return res.status(400).json({ error: 'Dependent User ID and Guardian User ID are required.' });
-    }
-
-    try {
-        const result = await pool.query(
-            `INSERT INTO account_guardians (dependent_user_id, guardian_user_id, permission_level)
-             VALUES ($1, $2, $3)
-             RETURNING id, dependent_user_id as dependentUserId, guardian_user_id as guardianUserId, permission_level as relationship`,
-            [dependentUserId, guardianUserId, permissionLevel || 'full']
-        );
-        res.status(201).json({ success: true, guardian: result.rows[0] });
-    } catch (err) {
-        console.error('Error creating guardian:', err);
-        res.status(500).json({ error: 'Server error creating guardian.' });
-    }
-});
-
-// 3. Delete a guardian relationship
-app.delete('/api/guardians/:guardianId', async (req, res) => {
-    const { guardianId } = req.params;
-    try {
-        await pool.query('DELETE FROM account_guardians WHERE id = $1', [guardianId]);
-        res.status(200).json({ success: true, message: 'Guardian deleted successfully.' });
-    } catch (err) {
-        console.error('Error deleting guardian:', err);
-        res.status(500).json({ error: 'Server error deleting guardian.' });
-    }
-});
-
-// ----------------------------------------------------
-// Account Deactivation Endpoint
-// ----------------------------------------------------
 app.post('/api/user/deactivate', async (req, res) => {
   const { userId, guardianPin } = req.body;
 
@@ -433,9 +366,6 @@ app.post('/api/user/deactivate', async (req, res) => {
   }
 });
 
-// ----------------------------------------------------
-// Toggle Shield Status (Added for iOS & Android Parity)
-// ----------------------------------------------------
 app.put('/api/user/toggle-shield', async (req, res) => {
     const { userId, isEnabled, pin } = req.body;
     if (!userId) {
@@ -462,6 +392,56 @@ app.put('/api/user/toggle-shield', async (req, res) => {
     }
 });
 
+// ----------------------------------------------------
+// Guardian Management Endpoints
+// ----------------------------------------------------
+app.get('/api/guardians/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT ag.id, ag.guardian_user_id as guardianUserId, ag.permission_level as relationship, ag.created_at as createdAt
+             FROM account_guardians ag
+             WHERE ag.dependent_user_id = $1`,
+            [userId]
+        );
+        res.status(200).json(result.rows);
+    } catch (err) {
+        console.error('Error fetching guardians:', err);
+        res.status(500).json({ error: 'Server error fetching guardians.' });
+    }
+});
+
+app.post('/api/guardians', async (req, res) => {
+    const { dependentUserId, guardianUserId, permissionLevel } = req.body;
+    if (!dependentUserId || !guardianUserId) {
+        return res.status(400).json({ error: 'Dependent User ID and Guardian User ID are required.' });
+    }
+
+    try {
+        const result = await pool.query(
+            `INSERT INTO account_guardians (dependent_user_id, guardian_user_id, permission_level)
+             VALUES ($1, $2, $3)
+             RETURNING id, dependent_user_id as dependentUserId, guardian_user_id as guardianUserId, permission_level as relationship`,
+            [dependentUserId, guardianUserId, permissionLevel || 'full']
+        );
+        res.status(201).json({ success: true, guardian: result.rows[0] });
+    } catch (err) {
+        console.error('Error creating guardian:', err);
+        res.status(500).json({ error: 'Server error creating guardian.' });
+    }
+});
+
+app.delete('/api/guardians/:guardianId', async (req, res) => {
+    const { guardianId } = req.params;
+    try {
+        await pool.query('DELETE FROM account_guardians WHERE id = $1', [guardianId]);
+        res.status(200).json({ success: true, message: 'Guardian deleted successfully.' });
+    } catch (err) {
+        console.error('Error deleting guardian:', err);
+        res.status(500).json({ error: 'Server error deleting guardian.' });
+    }
+});
+
 app.post('/api/guardians/send-alert', async (req, res) => {
     const { userId, guardianPhone, alertMessage } = req.body;
     
@@ -482,30 +462,7 @@ app.post('/api/guardians/send-alert', async (req, res) => {
         console.error('Error dispatching SMS alert via Twilio:', err);
         res.status(500).json({ error: 'Failed to send SMS alert.' });
     }
-})
-
-// ----------------------------------------------------
-// Administration Section
-// ----------------------------------------------------
-
-
-// Get all users for Admin Dashboard
-app.get('/api/admin/users', authenticateToken, async (req, res) => {
-    try {
-        // Ensure only admins can access this
-        if (!req.user.is_admin && req.user.role !== 'admin') {
-            return res.status(403).json({ success: false, error: 'Access denied. Admins only.' });
-        }
-
-        const result = await pool.query('SELECT id, user_name AS name, owner_phone AS phone_number, email, role, is_admin FROM users ORDER BY id ASC');
-        res.json(result.rows);
-    } catch (err) {
-        console.error('Error fetching admin users:', err);
-        res.status(500).json({ success: false, error: 'Server error' });
-    }
 });
-
-
 
 // ----------------------------------------------------
 // Twilio Call Screening Webhooks
@@ -524,9 +481,6 @@ app.post('/whisper', (req, res) => {
     res.send(twiml.toString());
 });
 
-// ====================================================
-// 1. UPDATED VOICE WEBHOOK (WITH message_name SUPPORT)
-// ====================================================
 app.post('/voice', async (req, res) => {
     const twilioNumber = req.body.To;
     const rawCallerId = req.body.From;
@@ -534,7 +488,6 @@ app.post('/voice', async (req, res) => {
     
     const twiml = new VoiceResponse();
     try {
-        // Query message_name instead of user_name
         const userResult = await pool.query(`
             SELECT u.id, u.message_name, u.owner_phone, u.is_call_shield_enabled
             FROM twilio_numbers pn JOIN users u ON pn.user_id = u.id
@@ -545,13 +498,9 @@ app.post('/voice', async (req, res) => {
             const user = userResult.rows[0];
             const announcedName = user.message_name || null;
 
-            // Build dynamic prompt based on whether message_name is set or NULL
-            let greetingPrompt = '';
-            if (announcedName) {
-                greetingPrompt = `Hello! This call is protected by Mobile Call Shield for ${announcedName}. Please enter your guardian PIN or passcode to continue.`;
-            } else {
-                greetingPrompt = `Hello! This call is protected by Mobile Call Shield. Please enter your guardian PIN or passcode to continue.`;
-            }
+            let greetingPrompt = announcedName 
+                ? `Hello! This call is protected by Mobile Call Shield for ${announcedName}. Please enter your guardian PIN or passcode to continue.` 
+                : `Hello! This call is protected by Mobile Call Shield. Please enter your guardian PIN or passcode to continue.`;
 
             const dialUser = (twimlResponse) => {
                 const protocol = req.headers['x-forwarded-proto'] || 'https';
@@ -617,10 +566,6 @@ app.post('/voice', async (req, res) => {
     res.send(twiml.toString());
 });
 
-
-// ====================================================
-// 2. UPDATED VOICEMAIL GREETING HANDLER
-// ====================================================
 app.post('/handle-voicemail', async (req, res) => {
     const dialStatus = req.body.DialCallStatus;
     const twilioNumber = req.body.To;
@@ -635,7 +580,6 @@ app.post('/handle-voicemail', async (req, res) => {
 
         const messageName = userResult.rows.length > 0 ? userResult.rows[0].message_name : null;
         
-        // Use message_name if available, else use privacy fallback
         const unavailabilityPrompt = messageName 
             ? `${messageName} is currently unavailable. Please leave a message after the tone.` 
             : `The user is currently unavailable. Please leave a message after the tone.`;
@@ -669,10 +613,6 @@ app.post('/handle-voicemail', async (req, res) => {
     res.send(twiml.toString());
 });
 
-
-// ====================================================
-// 3. SAVE RECORDING & SEND NOTIFICATION
-// ====================================================
 app.post('/save-recording', async (req, res) => {
     const recordingUrl = req.body.RecordingUrl;
     const callerNumber = req.body.From;
@@ -690,7 +630,6 @@ app.post('/save-recording', async (req, res) => {
         if (userResult.rows.length > 0) {
             const { owner_phone, message_name, sms_notifications_enabled } = userResult.rows[0];
             const recipientName = message_name || 'you';
-
             const sendSms = sms_notifications_enabled === true || sms_notifications_enabled === null;
 
             if (owner_phone && sendSms && typeof client !== 'undefined') {
@@ -765,7 +704,6 @@ app.post('/process-passphrase', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// Loop prevention handler if owner misses the 2nd ring
 app.post('/api/twilio/handle-missed-call', (req, res) => {
     const twiml = new VoiceResponse();
     const dialStatus = req.body.DialCallStatus;
