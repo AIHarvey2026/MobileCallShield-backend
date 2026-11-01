@@ -392,6 +392,35 @@ app.put('/api/user/toggle-shield', async (req, res) => {
     }
 });
 
+// User Profile
+
+app.get('/api/user/profile', async (req, res) => {
+    try {
+        const userId = req.query.userId;
+        const result = await pool.query(
+            'SELECT id, email, twilio_screening_number, subscription_status FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const user = result.rows[0];
+        res.json({
+            user: {
+                id: user.id,
+                email: user.email,
+                assignedTwilioNumber: user.twilio_screening_number, // Mapped to existing column
+                subscriptionStatus: user.subscription_status
+            }
+        });
+    } catch (err) {
+        console.error('Error fetching user profile:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // ----------------------------------------------------
 // Guardian Management Endpoints
 // ----------------------------------------------------
@@ -461,6 +490,47 @@ app.post('/api/guardians/send-alert', async (req, res) => {
     } catch (err) {
         console.error('Error dispatching SMS alert via Twilio:', err);
         res.status(500).json({ error: 'Failed to send SMS alert.' });
+    }
+});
+
+// Change Guardian Passcode
+
+app.post('/api/settings/update-guardian-code', authenticateToken, async (req, res) => {
+    const { userId, currentGuardianCode, newGuardianCode } = req.body;
+    const targetUserId = userId || req.user.id; // Fallback to authenticated user id from JWT
+
+    if (!targetUserId || !newGuardianCode) {
+        return res.status(400).json({ success: false, error: 'User ID and new guardian code are required.' });
+    }
+
+    try {
+        // 1. Fetch the user's current guardian code from the database
+        const userResult = await pool.query('SELECT guardian_code, pin FROM users WHERE id = $1', [targetUserId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'User not found.' });
+        }
+
+        const dbGuardianCode = userResult.rows[0].guardian_code || userResult.rows[0].pin || '1234';
+
+        // 2. Verify the current code if provided by the app
+        if (currentGuardianCode && currentGuardianCode.trim() !== dbGuardianCode) {
+            return res.status(401).json({ success: false, error: 'Incorrect current guardian code.' });
+        }
+
+        // 3. Update to the new guardian code if validation passes
+        const result = await pool.query(
+            'UPDATE users SET guardian_code = $1 WHERE id = $2 RETURNING id, guardian_code',
+            [newGuardianCode.trim(), targetUserId]
+        );
+
+        res.json({
+            success: true,
+            message: 'Guardian code updated successfully!',
+            guardianCode: result.rows[0].guardian_code
+        });
+    } catch (err) {
+        console.error('Error updating guardian code:', err);
+        res.status(500).json({ success: false, error: 'Server error updating guardian code.' });
     }
 });
 
@@ -768,6 +838,77 @@ app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
+
+// ----------------------------------------------------
+// Update Pin & Passcode
+// ----------------------------------------------------
+
+
+// Update Pin
+app.post('/api/settings/update-pin', authenticateToken, async (req, res) => {
+    const { userId, newPin, pin } = req.body;
+    const targetUserId = userId || req.user.id;
+    const pinToSave = newPin || pin;
+
+    if (!targetUserId || !pinToSave) {
+        return res.status(400).json({ success: false, error: 'User ID and new PIN are required.' });
+    }
+
+    try {
+        const result = await pool.query(
+            'UPDATE users SET pin = $1 WHERE id = $2 RETURNING id, pin',
+            [pinToSave.trim(), targetUserId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'User not found.' });
+        }
+
+        res.json({
+            success: true,
+            message: 'PIN updated successfully!',
+            pin: result.rows[0].pin
+        });
+    } catch (err) {
+        console.error('Error updating PIN:', err);
+        res.status(500).json({ success: false, error: 'Server error updating PIN.' });
+    }
+});
+
+
+// Update Passcode
+
+app.post('/api/settings/update-passcode', authenticateToken, async (req, res) => {
+    const { userId, passcode, newPasscode } = req.body;
+    const targetUserId = userId || req.user.id; // Fallback to authenticated user id from JWT
+
+    const passcodeToSave = newPasscode || passcode;
+
+    if (!targetUserId || !passcodeToSave) {
+        return res.status(400).json({ success: false, error: 'User ID and new passcode are required.' });
+    }
+
+    try {
+        const result = await pool.query(
+            'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
+            [passcodeToSave.trim(), targetUserId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'User not found.' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Passcode updated successfully!',
+            passcode: result.rows[0].passcode
+        });
+    } catch (err) {
+        console.error('Error updating passcode:', err);
+        res.status(500).json({ success: false, error: 'Server error updating passcode.' });
+    }
+});
+
 
 // ----------------------------------------------------
 // Server Listen
