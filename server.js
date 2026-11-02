@@ -1073,7 +1073,7 @@ app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
             'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC',
             [userId]
         );
-        res.json({ logs: result.rows });
+        res.json(result.rows); // Returns a direct JSON array
     } catch (err) {
         console.error('Error fetching call logs:', err);
         res.status(500).json({ error: 'Server error' });
