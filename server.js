@@ -293,6 +293,17 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
+// settings
+app.get('/api/settings', (req, res) => {
+    res.json({
+        success: true,
+        settings: {
+            app_name: "Mobile Call Shield",
+            logo_url: "" // Add a hosted logo URL here if you have one, or leave blank
+        }
+    });
+});
+
 // ----------------------------------------------------
 // User Settings & Profile
 // ----------------------------------------------------
