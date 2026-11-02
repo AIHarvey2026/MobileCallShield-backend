@@ -839,6 +839,93 @@ app.post('/process-passphrase', async (req, res) => {
     res.send(twiml.toString());
 });
 
+// ==========================================
+// TRUSTED CONTACTS & GUARDIANS API ROUTES
+// ==========================================
+
+// 1. Fetch Trusted Contacts for a User
+app.get('/api/trusted-contacts/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const query = `
+            SELECT id, name, phone_numbers, is_guardian, is_primary 
+            FROM trusted_contacts 
+            WHERE user_id = $1
+            ORDER BY name ASC
+        `;
+        const result = await pool.query(query, [userId]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("❌ Error fetching trusted contacts:", err);
+        res.status(500).json({ error: "Failed to fetch trusted contacts." });
+    }
+});
+
+// 2. Bulk Upload / Add Trusted Contacts
+app.post('/api/trusted-contacts/bulk', async (req, res) => {
+    const { userId, contacts } = req.body;
+    
+    if (!userId || !contacts || !Array.isArray(contacts)) {
+        return res.status(400).json({ error: "userId and contacts array are required." });
+    }
+
+    try {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            for (const contact of contacts) {
+                const query = `
+                    INSERT INTO trusted_contacts (user_id, name, phone_numbers, is_guardian, is_primary)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT DO NOTHING
+                `;
+                await client.query(query, [
+                    userId,
+                    contact.name,
+                    contact.phone_numbers || [],
+                    contact.is_guardian || false,
+                    contact.is_primary || false
+                ]);
+            }
+            await client.query('COMMIT');
+            res.status(201).json({ message: "Contacts synced successfully." });
+        } catch (dbErr) {
+            await client.query('ROLLBACK');
+            throw dbErr;
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error("❌ Error bulk uploading contacts:", err);
+        res.status(500).json({ error: "Server error syncing contacts." });
+    }
+});
+
+// 3. Toggle Guardian Status for a Contact
+app.patch('/api/trusted-contacts/:contactId/guardian', async (req, res) => {
+    const { contactId } = req.params;
+    const { is_guardian } = req.body;
+
+    try {
+        const query = `
+            UPDATE trusted_contacts 
+            SET is_guardian = $1 
+            WHERE id = $2 
+            RETURNING *
+        `;
+        const result = await pool.query(query, [is_guardian, contactId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Contact not found." });
+        }
+        
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error("❌ Error updating guardian status:", err);
+        res.status(500).json({ error: "Server error updating guardian status." });
+    }
+});
+
 app.post('/api/twilio/handle-missed-call', (req, res) => {
     const twiml = new VoiceResponse();
     const dialStatus = req.body.DialCallStatus;
