@@ -534,6 +534,60 @@ app.post('/api/settings/update-guardian-code', authenticateToken, async (req, re
     }
 });
 
+
+// POST /api/guardians/toggle
+// Expects JSON body: { "ownerId": 12, "guardianId": 45, "isGuardian": true }
+app.post('/api/guardians/toggle', async (req, res) => {
+  const { ownerId, guardianId, isGuardian } = req.body;
+
+  // Validate required fields
+  if (!ownerId || !guardianId || typeof isGuardian !== 'boolean') {
+    return res.status(400).json({ 
+      error: 'Invalid payload. ownerId, guardianId, and isGuardian (boolean) are required.' 
+    });
+  }
+
+  try {
+    if (isGuardian) {
+      // Upsert: Set as active, log agreement timestamp, and clear any prior revocation
+      const query = `
+        INSERT INTO guardian_contacts (owner_id, guardian_id, is_active, agreed_at, revoked_at)
+        VALUES ($1, $2, TRUE, NOW(), NULL)
+        ON CONFLICT (owner_id, guardian_id) 
+        DO UPDATE SET 
+          is_active = TRUE, 
+          agreed_at = NOW(), 
+          revoked_at = NULL;
+      `;
+      await db.query(query, [ownerId, guardianId]);
+      
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Guardian status enabled and agreement logged.' 
+      });
+
+    } else {
+      // Soft-delete: Mark inactive and record revoked timestamp for audit trailing
+      const query = `
+        UPDATE guardian_contacts 
+        SET is_active = FALSE, 
+            revoked_at = NOW() 
+        WHERE owner_id = $1 AND guardian_id = $2;
+      `;
+      await db.query(query, [ownerId, guardianId]);
+
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Guardian status disabled and revocation logged.' 
+      });
+    }
+
+  } catch (err) {
+    console.error('Error toggling guardian status:', err);
+    return res.status(500).json({ error: 'Internal server database error' });
+  }
+});
+
 // ----------------------------------------------------
 // Twilio Call Screening Webhooks
 // ----------------------------------------------------
