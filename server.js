@@ -465,14 +465,16 @@ app.get('/api/user/profile', async (req, res) => {
         }
 
         const user = result.rows[0];
+        
         res.json({
             user: {
                 id: user.id,
                 email: user.email,
-                assignedTwilioNumber: user.twilio_screening_number,
+                assignedTwilioNumber: user.twilio_screening_number, 
                 subscriptionStatus: user.subscription_status
             }
         });
+
     } catch (err) {
         console.error('Error fetching user profile:', err);
         res.status(500).json({ error: 'Internal server error' });
