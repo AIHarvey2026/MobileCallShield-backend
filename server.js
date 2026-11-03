@@ -183,7 +183,7 @@ app.get('/api/admin/users', authenticateToken, async (req, res) => {
 // Inventory Check Endpoint
 app.get('/api/admin/check-number-inventory', async (req, res) => {
     try {
-        const query = 'SELECT COUNT(*) FROM phone_numbers WHERE is_assigned = false';
+	const query = 'SELECT COUNT(*) FROM twilio_numbers WHERE user_id IS NULL OR is_active = false';
         const result = await pool.query(query);
         const availableCount = parseInt(result.rows[0].count, 10);
         
