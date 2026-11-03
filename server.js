@@ -259,9 +259,17 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         if (availablePhoneQuery.rows.length > 0) {
             const phoneRow = availablePhoneQuery.rows[0];
             assignedPhoneNumber = phoneRow.phone_number;
+            
+            // 1. Assign number in twilio_numbers inventory table
             await client.query(
                 `UPDATE twilio_numbers SET user_id = $1, is_active = true WHERE id = $2`,
                 [newUserId, phoneRow.id]
+            );
+
+            // 2. Sync twilio_screening_number column in users table
+            await client.query(
+                `UPDATE users SET twilio_screening_number = $1 WHERE id = $2`,
+                [assignedPhoneNumber, newUserId]
             );
         }
 
@@ -276,6 +284,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 name: newUser.rows[0].user_name,
                 phoneNumber: newUser.rows[0].owner_phone,
                 assignedTwilioNumber: assignedPhoneNumber,
+                twilio_screening_number: assignedPhoneNumber,
                 email: newUser.rows[0].email,
                 passcode: newUser.rows[0].passcode,
                 messageName: newUser.rows[0].message_name,
