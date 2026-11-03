@@ -702,7 +702,6 @@ app.post('/voice', async (req, res) => {
 });
 
 app.post('/handle-voicemail', async (req, res) => {
-    const dialStatus = req.body.DialCallStatus;
     const twilioNumber = req.body.To;
     const twiml = new VoiceResponse();
 
@@ -716,22 +715,21 @@ app.post('/handle-voicemail', async (req, res) => {
         const messageName = userResult.rows.length > 0 ? userResult.rows[0].message_name : null;
         
         const unavailabilityPrompt = messageName 
-            ? `${messageName} is currently unavailable. Please leave a message after the tone.` 
-            : `The user is currently unavailable. Please leave a message after the tone.`;
+            ? `${messageName} is currently unavailable. Please leave a message after the tone. Press pound when finished.` 
+            : `The user is currently unavailable. Please leave a message after the tone. Press pound when finished.`;
 
-        if (dialStatus !== 'completed') {
-            twiml.say({ voice: 'Polly.Joanna-Neural' }, unavailabilityPrompt);
-            twiml.record({
-                action: '/save-recording',
-                method: 'POST',
-                maxLength: 120,
-                playBeep: true,
-                finishOnKey: '#'
-            });
-            twiml.say({ voice: 'Polly.Joanna-Neural' }, 'We did not receive a recording. Goodbye.');
-        } else {
-            twiml.hangup();
-        }
+        // Speak the greeting
+        twiml.say({ voice: 'Polly.Joanna-Neural' }, unavailabilityPrompt);
+
+        // Record the voicemail and send the result to /save-recording
+        twiml.record({
+            action: '/save-recording',
+            method: 'POST',
+            maxLength: 120,
+            playBeep: true,
+            finishOnKey: '#'
+        });
+
     } catch (err) {
         console.error('Error handling voicemail greeting:', err);
         twiml.say({ voice: 'Polly.Joanna-Neural' }, 'The user is currently unavailable. Please leave a message after the tone.');
@@ -1158,6 +1156,36 @@ app.post('/api/settings/update-passcode', authenticateToken, async (req, res) =>
         res.status(500).json({ success: false, error: 'Server error updating passcode.' });
     }
 });
+
+
+// Example Express route to check available Twilio / Telnyx phone number inventory
+app.get('/api/admin/check-number-inventory', async (req, res) => {
+    try {
+        // Query your PostgreSQL database for unassigned numbers
+        const query = 'SELECT COUNT(*) FROM phone_numbers WHERE is_assigned = false';
+        const result = await db.query(query);
+        const availableCount = parseInt(result.rows[0].count, 10);
+        
+        const threshold = 5; // Alert threshold
+        
+        if (availableCount <= threshold) {
+            // Optional: Automatically send an email or SMS notification to the admin
+            console.log(`⚠️ LOW INVENTORY WARNING: Only ${availableCount} phone numbers remaining!`);
+            
+            // You can integrate nodemailer or a Twilio alert message here to email yourself
+        }
+
+        res.json({
+            success: true,
+            availableNumbers: availableCount,
+            isLowInventory: availableCount <= threshold
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
 
 
 // ----------------------------------------------------
