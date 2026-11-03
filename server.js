@@ -65,9 +65,11 @@ const authLimiter = rateLimit({
     }
 });
 
-// --- Nodemailer Transporter & Inventory Alert Function ---
+// --- Nodemailer Transporter for Custom Domain (support@mobilecallshield.com) ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '465', 10),
+    secure: parseInt(process.env.SMTP_PORT || '465', 10) === 465, // true for 465, false for 587
     auth: {
         user: process.env.ADMIN_EMAIL || process.env.EMAIL_USER,
         pass: process.env.ADMIN_EMAIL_PASS || process.env.EMAIL_PASS
