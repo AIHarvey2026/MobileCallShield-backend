@@ -686,6 +686,76 @@ app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
 });
 
 // ----------------------------------------------------
+// Twilio Voice Webhook Handler & Call Logger
+// ----------------------------------------------------
+app.post('/api/twilio/voice', async (req, res) => {
+    const { CallSid, From, To, CallStatus, Direction } = req.body;
+    
+    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}`);
+
+    const client = await pool.connect();
+    try {
+        // 1. Find which user owns this Twilio number
+        const userQuery = await client.query(
+            `SELECT u.id AS user_id FROM users u 
+             JOIN twilio_numbers tn ON u.id = tn.user_id 
+             WHERE tn.phone_number = $1 LIMIT 1`,
+            [To]
+        );
+
+        let userId = null;
+        if (userQuery.rows.length > 0) {
+            userId = userQuery.rows[0].user_id;
+        }
+
+        // 2. Insert the call record into the call_logs table
+        await client.query(
+            `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+             ON CONFLICT (call_sid) DO UPDATE 
+             SET call_status = EXCLUDED.call_status`,
+            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound']
+        );
+
+        // 3. Generate TwiML response to control the call flow
+        const twiml = new VoiceResponse();
+        
+        // Example logic: Check if 'From' number is a trusted contact
+        let isTrusted = false;
+        if (userId) {
+            const contactCheck = await client.query(
+                `SELECT id FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
+                [userId, From]
+            );
+            isTrusted = contactCheck.rows.length > 0;
+        }
+
+        if (isTrusted) {
+            // Forward back to user's owner phone if trusted
+            twiml.say('Connecting your trusted contact.');
+            // Add your dial/forward logic here
+        } else {
+            // Send to screening / passcode challenge
+            twiml.say('Please enter your passcode to connect.');
+            // Add your gather/screening logic here
+        }
+
+        res.type('text/xml');
+        res.send(twiml.toString());
+
+    } catch (err) {
+        console.error('[Twilio Webhook Error] Failed to log or process call:', err);
+        const twiml = new VoiceResponse();
+        twiml.say('An application error has occurred.');
+        res.type('text/xml');
+        res.send(twiml.toString());
+    } finally {
+        client.release();
+    }
+});
+
+
+// ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
 app.listen(PORT, () => {
