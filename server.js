@@ -603,7 +603,7 @@ app.patch('/api/trusted-contacts/:contactId/guardian', async (req, res) => {
     }
 });
 
-app.post('/api/settings/update-pin', authenticateToken, async (req, res) => {
+app.put('/api/user/update-pin', async (req, res) => {
     const { userId, newPin, pin } = req.body;
     const targetUserId = userId || req.user.id;
     const pinToSave = newPin || pin;
@@ -633,33 +633,48 @@ app.post('/api/settings/update-pin', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/settings/update-passcode', authenticateToken, async (req, res) => {
-    const { userId, passcode, newPasscode } = req.body;
-    const targetUserId = userId || req.user.id;
-    const passcodeToSave = newPasscode || passcode;
+app.post('/api/settings/update-passcode', async (req, res) => {
+    const { userId, pin, currentPasscode, newPasscode } = req.body;
 
-    if (!targetUserId || !passcodeToSave) {
-        return res.status(400).json({ success: false, error: 'User ID and new passcode are required.' });
+    if (!userId || !pin || !currentPasscode || !newPasscode) {
+        return res.status(400).json({ success: false, error: 'User ID, PIN, current passcode, and new passcode are required.' });
     }
 
     try {
-        const result = await pool.query(
-            'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
-            [passcodeToSave.trim(), targetUserId]
-        );
+        // Fetch user's stored PIN and passcode from database
+        const userResult = await pool.query('SELECT id, pin, passcode FROM users WHERE id = $1', [userId]);
 
-        if (result.rows.length === 0) {
+        if (userResult.rows.length === 0) {
             return res.status(404).json({ success: false, error: 'User not found.' });
         }
 
-        res.json({
+        const user = userResult.rows[0];
+
+        // 1. Verify Owner PIN matches
+        if (String(user.pin).trim() !== String(pin).trim()) {
+            return res.status(401).json({ success: false, error: 'Incorrect Owner PIN.' });
+        }
+
+        // 2. Verify Current Passcode matches to prevent accidental changes
+        if (String(user.passcode).trim().toLowerCase() !== String(currentPasscode).trim().toLowerCase()) {
+            return res.status(401).json({ success: false, error: 'Current passcode phrase does not match.' });
+        }
+
+        // 3. Update to the new passcode
+        const result = await pool.query(
+            'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
+            [newPasscode.trim(), userId]
+        );
+
+        return res.json({
             success: true,
-            message: 'Passcode updated successfully!',
+            message: 'Passcode phrase updated successfully!',
             passcode: result.rows[0].passcode
         });
+
     } catch (err) {
         console.error('Error updating passcode:', err);
-        res.status(500).json({ success: false, error: 'Server error updating passcode.' });
+        return res.status(500).json({ success: false, error: 'Server error updating passcode.' });
     }
 });
 
