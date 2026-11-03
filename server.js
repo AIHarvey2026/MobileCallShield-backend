@@ -752,6 +752,34 @@ app.post('/api/twilio/voice', async (req, res) => {
     } finally {
         client.release();
     }
+
+
+// Get assigned Twilio screening number for a user
+app.get('/api/twilio/number/:userId', authenticateToken, async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT tn.phone_number AS twilio_screening_number 
+             FROM twilio_numbers tn 
+             WHERE tn.user_id = $1 AND tn.is_active = true 
+             LIMIT 1`,
+            [userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'No active Twilio number assigned to this user.' });
+        }
+
+        res.json({
+            success: true,
+            twilio_screening_number: result.rows[0].twilio_screening_number
+        });
+    } catch (err) {
+        console.error('Error fetching Twilio number:', err);
+        res.status(500).json({ success: false, error: 'Server error fetching assigned number.' });
+    }
+});
+
 });
 
 
