@@ -1069,17 +1069,26 @@ app.post('/save-voicemail', async (req, res) => {
 app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
     try {
         const userId = req.params.userId;
-        const result = await pool.query(
-            'SELECT * FROM call_logs WHERE user_id = $1 ORDER BY created_at DESC',
-            [userId]
-        );
+        const { startDate, endDate } = req.query;
+
+        let queryText = 'SELECT * FROM call_logs WHERE user_id = $1';
+        let queryParams = [userId];
+
+        // If date filters are provided, narrow down the SQL query
+        if (startDate && endDate) {
+            queryText += ' AND created_at::date >= $2 AND created_at::date <= $3';
+            queryParams.push(startDate, endDate);
+        }
+
+        queryText += ' ORDER BY created_at DESC';
+
+        const result = await pool.query(queryText, queryParams);
         res.json(result.rows); // Returns a direct JSON array
     } catch (err) {
         console.error('Error fetching call logs:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
-
 // ----------------------------------------------------
 // Update Pin & Passcode
 // ----------------------------------------------------
