@@ -206,8 +206,9 @@ app.get('/api/admin/check-number-inventory', async (req, res) => {
 // ----------------------------------------------------
 // Authentication & Setup Routes
 // ----------------------------------------------------
+
 app.post('/api/auth/register', authLimiter, async (req, res) => {
-    const { name, phoneNumber, email, password, pin, passcode, messageName } = req.body;
+    const { name, phoneNumber, email, password, pin, passcode, messageName, securityQuestion, securityAnswer } = req.body;
     if (!password || !email || !pin) {
         return res.status(400).json({ error: 'Email, password, and PIN are required.' });
     }
@@ -237,14 +238,24 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         const userPasscode = passcode || '1234';
         const passwordHash = await bcrypt.hash(String(password), 10);
+        
+        // Setup security question and answer with defaults if empty
+        const finalQuestion = securityQuestion && securityQuestion.trim() !== '' 
+            ? securityQuestion.trim() 
+            : "What was the name of your first pet?";
+            
+        const finalAnswer = securityAnswer && securityAnswer.trim() !== '' 
+            ? securityAnswer.trim().toLowerCase() 
+            : "fluffy";
+
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
         const newUser = await client.query(
-            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, message_name, subscription_status, trial_ends_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'trialing', $8, NOW())
-             RETURNING id, user_name, owner_phone, email, passcode, message_name, subscription_status`,
-            [name || email, realPhone, email, passwordHash, pin, userPasscode, sanitizedMessageName, trialEnd]
+            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, message_name, security_question, security_answer, subscription_status, trial_ends_at, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'trialing', $10, NOW())
+             RETURNING id, user_name, owner_phone, email, passcode, message_name, security_question, subscription_status`,
+            [name || email, realPhone, email, passwordHash, pin, userPasscode, sanitizedMessageName, finalQuestion, finalAnswer, trialEnd]
         );
 
         const newUserId = newUser.rows[0].id;
@@ -288,6 +299,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 email: newUser.rows[0].email,
                 passcode: newUser.rows[0].passcode,
                 messageName: newUser.rows[0].message_name,
+                securityQuestion: newUser.rows[0].security_question,
                 subscriptionStatus: newUser.rows[0].subscription_status
             }
         });
@@ -703,6 +715,78 @@ app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
 });
 
 // ----------------------------------------------------
+// Caller Line-Type & Behavioral Intelligence Helper
+// ----------------------------------------------------
+async function evaluateIncomingCaller(phoneNumber, userId) {
+    try {
+        // 1. Check Twilio Lookup API for Line Type & Carrier
+        const lookupResult = await client.lookups.v2.phoneNumbers(phoneNumber)
+            .fetch({ fields: ['line_type_intelligence'] });
+
+        const lineTypeData = lookupResult.lineTypeIntelligence;
+        const lineType = lineTypeData?.type || 'unknown'; // 'mobile', 'landline', 'voip'
+        const carrierName = lineTypeData?.carrierName || 'Unknown Carrier';
+
+        // 2. Check Call Frequency / Velocity in PostgreSQL (Has this number called repeatedly?)
+        const frequencyQuery = `
+            SELECT COUNT(*) AS call_count 
+            FROM call_logs 
+            WHERE from_number = $1 
+              AND created_at >= NOW() - INTERVAL '24 hours';
+        `;
+        const freqResult = await pool.query(frequencyQuery, [phoneNumber]);
+        const callCount = parseInt(freqResult.rows[0].call_count, 10) || 0;
+
+        // 3. Determine Risk Level, Color, and Label
+        let riskLevel = 'safe';
+        let colorCode = 'green';
+        let label = 'Verified Safe';
+
+        if (lineType === 'voip') {
+            riskLevel = 'high_risk';
+            colorCode = 'red';
+            label = '⚠️ VoIP Burner (High Scam Risk)';
+        } else if (callCount >= 3) {
+            riskLevel = 'suspicious';
+            colorCode = 'yellow';
+            label = '⚠️ Suspicious Mobile (Frequent Caller)';
+        } else if (lineType === 'landline') {
+            riskLevel = 'moderate';
+            colorCode = 'yellow';
+            label = 'Landline / Business Line';
+        } else {
+            riskLevel = 'safe';
+            colorCode = 'green';
+            label = 'Standard Mobile Line';
+        }
+
+        return {
+            phoneNumber,
+            lineType: lineType.toUpperCase(),
+            carrier: carrierName,
+            recentCallCount: callCount,
+            riskLevel,
+            colorCode,
+            label
+        };
+
+    } catch (err) {
+        console.error('[EVALUATE] Error evaluating caller:', err);
+        return {
+            phoneNumber,
+            lineType: 'UNKNOWN',
+            carrier: 'Unknown',
+            recentCallCount: 0,
+            riskLevel: 'unknown',
+            colorCode: 'gray',
+            label: 'Unverified Line'
+        };
+    }
+}
+
+
+
+// ----------------------------------------------------
 // Twilio Voice Webhook Handler & Call Logger
 // ----------------------------------------------------
 app.post('/api/twilio/voice', async (req, res) => {
@@ -710,51 +794,66 @@ app.post('/api/twilio/voice', async (req, res) => {
     
     console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}`);
 
-    const client = await pool.connect();
+    const dbClient = await pool.connect();
     try {
-        // 1. Find which user owns this Twilio number
-        const userQuery = await client.query(
-            `SELECT u.id AS user_id FROM users u 
+        // 1. Find which user owns this Twilio number (and check screening status)
+        const userQuery = await dbClient.query(
+            `SELECT u.id AS user_id, u.owner_phone, u.is_call_shield_enabled FROM users u 
              JOIN twilio_numbers tn ON u.id = tn.user_id 
              WHERE tn.phone_number = $1 LIMIT 1`,
             [To]
         );
 
-        let userId = null;
-        if (userQuery.rows.length > 0) {
-            userId = userQuery.rows[0].user_id;
+        if (userQuery.rows.length === 0) {
+            res.type('text/xml');
+            return res.send(new VoiceResponse().say('This number is not active.').toString());
         }
 
-        // 2. Insert the call record into the call_logs table
-        await client.query(
-            `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        const user = userQuery.rows[0];
+        const userId = user.user_id;
+
+        // 2. Evaluate caller line type & behavior
+        const evaluation = await evaluateIncomingCaller(From, userId);
+
+        // 3. Insert or update the call record into the call_logs table
+        await dbClient.query(
+            `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
              ON CONFLICT (call_sid) DO UPDATE 
              SET call_status = EXCLUDED.call_status`,
-            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound']
+            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound', evaluation.lineType, evaluation.carrier, evaluation.label]
         );
 
-        // 3. Generate TwiML response to control the call flow
         const twiml = new VoiceResponse();
-        
-        // Example logic: Check if 'From' number is a trusted contact
-        let isTrusted = false;
-        if (userId) {
-            const contactCheck = await client.query(
-                `SELECT id FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
-                [userId, From]
-            );
-            isTrusted = contactCheck.rows.length > 0;
+
+        // 4. IF GUARDIAN TURNED OFF CALL SCREENING: Forward immediately without screening
+        if (user.is_call_shield_enabled === false) {
+            if (user.owner_phone) {
+                twiml.say('Connecting your call.');
+                twiml.dial(user.owner_phone);
+            } else {
+                twiml.say('Call screening is currently paused, but no owner phone is configured.');
+            }
+            res.type('text/xml');
+            return res.send(twiml.toString());
         }
 
+        // 5. Check if 'From' number is a trusted contact
+        const contactCheck = await dbClient.query(
+            `SELECT id FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
+            [userId, From]
+        );
+        const isTrusted = contactCheck.rows.length > 0;
+
         if (isTrusted) {
-            // Forward back to user's owner phone if trusted
             twiml.say('Connecting your trusted contact.');
-            // Add your dial/forward logic here
+            if (user.owner_phone) {
+                twiml.dial(user.owner_phone);
+            }
         } else {
-            // Send to screening / passcode challenge
+            // Send to screening / passcode challenge flow
             twiml.say('Please enter your passcode to connect.');
-            // Add your gather/screening logic here
+            // Add your <Gather> logic here
         }
 
         res.type('text/xml');
@@ -766,69 +865,10 @@ app.post('/api/twilio/voice', async (req, res) => {
         twiml.say('An application error has occurred.');
         res.type('text/xml');
         res.send(twiml.toString());
-    } finally {
-        client.release();
+  } finally {
+        dbClient.release();
     }
-
-
-// Get assigned Twilio screening number for a user
-app.get('/api/twilio/number/:userId', authenticateToken, async (req, res) => {
-    const { userId } = req.params;
-    try {
-        const result = await pool.query(
-            `SELECT tn.phone_number AS twilio_screening_number 
-             FROM twilio_numbers tn 
-             WHERE tn.user_id = $1 AND tn.is_active = true 
-             LIMIT 1`,
-            [userId]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ success: false, error: 'No active Twilio number assigned to this user.' });
-        }
-
-        res.json({
-            success: true,
-            twilio_screening_number: result.rows[0].twilio_screening_number
-        });
-    } catch (err) {
-        console.error('Error fetching Twilio number:', err);
-        res.status(500).json({ success: false, error: 'Server error fetching assigned number.' });
-    }
-});
-
-// 1. Get user's security question
-app.get('/api/auth/security-question', async (req, res) => {
-    const { userId } = req.query;
-    try {
-        const result = await pool.query('SELECT security_question FROM users WHERE id = $1', [userId]);
-        if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-        res.json({ question: result.rows[0].security_question || "What was the name of your first pet?" });
-    } catch (err) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// 2. Verify user's security answer
-app.post('/api/auth/verify-security-answer', async (req, res) => {
-    const { userId, answer } = req.body;
-    try {
-        const result = await pool.query('SELECT security_answer FROM users WHERE id = $1', [userId]);
-        if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-
-        const storedAnswer = result.rows[0].security_answer || "";
-        if (storedAnswer.trim().toLowerCase() === answer.trim().toLowerCase()) {
-            res.json({ success: true, message: 'Answer verified successfully!' });
-        } else {
-            res.status(401).json({ success: false, error: 'Incorrect answer.' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-
-});
+}); 
 
 
 // ----------------------------------------------------
