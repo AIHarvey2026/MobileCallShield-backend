@@ -4,6 +4,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const twilio = require('twilio');
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const rateLimit = require('express-rate-limit');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
@@ -690,29 +691,7 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 });
 
-// Call Logs Route
-app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
-    try {
-        const userId = req.params.userId;
-        const { startDate, endDate } = req.query;
 
-        let queryText = 'SELECT * FROM call_logs WHERE user_id = $1';
-        let queryParams = [userId];
-
-        if (startDate && endDate) {
-            queryText += ' AND created_at::date >= $2 AND created_at::date <= $3';
-            queryParams.push(startDate, endDate);
-        }
-
-        queryText += ' ORDER BY created_at DESC';
-
-        const result = await pool.query(queryText, queryParams);
-        res.json(result.rows);
-    } catch (err) {
-        console.error('Error fetching call logs:', err);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
 
 // ----------------------------------------------------
 // Caller Line-Type & Behavioral Intelligence Helper
@@ -720,8 +699,8 @@ app.get('/api/call-logs/:userId', authenticateToken, async (req, res) => {
 async function evaluateIncomingCaller(phoneNumber, userId) {
     try {
         // 1. Check Twilio Lookup API for Line Type & Carrier
-        const lookupResult = await client.lookups.v2.phoneNumbers(phoneNumber)
-            .fetch({ fields: ['line_type_intelligence'] });
+        const lookupResult = await twilioClient.lookups.v2.phoneNumbers(phoneNumber)
+    .fetch({ fields: ['line_type_intelligence'] });
 
         const lineTypeData = lookupResult.lineTypeIntelligence;
         const lineType = lineTypeData?.type || 'unknown'; // 'mobile', 'landline', 'voip'
