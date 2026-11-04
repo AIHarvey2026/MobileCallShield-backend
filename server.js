@@ -797,6 +797,37 @@ app.get('/api/twilio/number/:userId', authenticateToken, async (req, res) => {
     }
 });
 
+// 1. Get user's security question
+app.get('/api/auth/security-question', async (req, res) => {
+    const { userId } = req.query;
+    try {
+        const result = await pool.query('SELECT security_question FROM users WHERE id = $1', [userId]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        res.json({ question: result.rows[0].security_question || "What was the name of your first pet?" });
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// 2. Verify user's security answer
+app.post('/api/auth/verify-security-answer', async (req, res) => {
+    const { userId, answer } = req.body;
+    try {
+        const result = await pool.query('SELECT security_answer FROM users WHERE id = $1', [userId]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+        const storedAnswer = result.rows[0].security_answer || "";
+        if (storedAnswer.trim().toLowerCase() === answer.trim().toLowerCase()) {
+            res.json({ success: true, message: 'Answer verified successfully!' });
+        } else {
+            res.status(401).json({ success: false, error: 'Incorrect answer.' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+
 });
 
 
