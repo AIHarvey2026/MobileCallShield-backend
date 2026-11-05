@@ -808,6 +808,96 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     res.send(twiml.toString());
 });
 
+app.post('/api/twilio/voice', async (req, res) => {
+    const { CallSid, From, To, CallStatus, Direction } = req.body;
+    
+    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}`);
+
+    const dbClient = await pool.connect();
+    try {
+        // 1. Find which user owns this Twilio number (including message_name and screening status)
+        const userQuery = await dbClient.query(
+            `SELECT u.id AS user_id, u.owner_phone, u.is_call_shield_enabled, u.message_name FROM users u 
+             JOIN twilio_numbers tn ON u.id = tn.user_id 
+             WHERE tn.phone_number = $1 LIMIT 1`,
+            [To]
+        );
+
+        if (userQuery.rows.length === 0) {
+            res.type('text/xml');
+            return res.send(new VoiceResponse().say('This number is not active.').toString());
+        }
+
+        const user = userQuery.rows[0];
+        const userId = user.user_id;
+
+        // 2. Evaluate caller line type & behavior
+        const evaluation = await evaluateIncomingCaller(From, userId);
+
+        // 3. Insert or update the call record into the call_logs table
+        await dbClient.query(
+            `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+             ON CONFLICT (call_sid) DO UPDATE 
+             SET call_status = EXCLUDED.call_status`,
+            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound', evaluation.lineType, evaluation.carrier, evaluation.label]
+        );
+
+        const twiml = new VoiceResponse();
+
+        // 4. IF GUARDIAN TURNED OFF CALL SCREENING: Forward immediately without screening
+        if (user.is_call_shield_enabled === false) {
+            if (user.owner_phone) {
+                twiml.say('Connecting your call.');
+                twiml.dial(user.owner_phone);
+            } else {
+                twiml.say('Call screening is currently paused, but no owner phone is configured.');
+            }
+            res.type('text/xml');
+            return res.send(twiml.toString());
+        }
+
+        // 5. Check if 'From' number is a trusted contact
+        const contactCheck = await dbClient.query(
+            `SELECT id FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
+            [userId, From]
+        );
+        const isTrusted = contactCheck.rows.length > 0;
+
+        if (isTrusted) {
+            twiml.say('Connecting your trusted contact.');
+            if (user.owner_phone) {
+                twiml.dial(user.owner_phone);
+            }
+        } else {
+            // Send to screening / passcode challenge flow using <Gather> (Speech + DTMF + Doctor Bypass)
+            const gather = twiml.gather({
+                input: 'speech dtmf',
+                numDigits: 4,
+                action: '/api/twilio/verify-passcode',
+                method: 'POST',
+                timeout: 10,
+                speechTimeout: 'auto'
+            });
+            
+            const greetingName = user.message_name || 'the owner';
+            gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please state your four digit passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
+        }
+
+        res.type('text/xml');
+        res.send(twiml.toString());
+
+    } catch (err) {
+        console.error('[Twilio Webhook Error] Failed to log or process call:', err);
+        const twiml = new VoiceResponse();
+        twiml.say('An application error has occurred.');
+        res.type('text/xml');
+        res.send(twiml.toString());
+    } finally {
+        dbClient.release();
+    }
+});
+
 // 1. Voicemail Recording Handler Route
 app.post('/api/twilio/handle-voicemail', async (req, res) => {
     const { CallSid, RecordingUrl } = req.body;
