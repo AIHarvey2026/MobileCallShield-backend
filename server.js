@@ -821,27 +821,18 @@ app.post('/api/twilio/voice', async (req, res) => {
 // Twilio Voice Webhook Handler & Passcode Verification
 // ----------------------------------------------------
 app.post('/api/twilio/verify-passcode', async (req, res) => {
-    const { CallSid, Digits, SpeechResult, To, Confidence } = req.body;
-    const isTimeoutFallback = req.query.fallback === 'voicemail' || !Digits && !SpeechResult;
+    const { CallSid, Digits, SpeechResult, To } = req.body;
+    const isTimeoutFallback = req.query.fallback === 'voicemail';
     const twiml = new VoiceResponse();
 
-    const digitsInput = (Digits || '').trim();
-    const speechInput = (SpeechResult || '').toLowerCase().trim();
+    let digitsInput = (Digits || '').trim();
+    let speechInput = (SpeechResult || '').toLowerCase().trim();
 
     console.log(`[Verify Passcode] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
 
-    // If it's a timeout, fallback query, or completely blank input -> Voicemail instantly!
+    // 🔥 YOUR GENIUS IDEA: If no one spoke or it timed out, force a wrong passcode value!
     if (isTimeoutFallback || (digitsInput === '' && speechInput === '')) {
-        twiml.say('Passcode not recognized. Please leave a message after the tone.');
-        twiml.record({
-            action: '/api/twilio/handle-voicemail',
-            method: 'POST',
-            maxLength: 60,
-            transcribe: true,
-            transcribeCallback: '/api/twilio/voicemail-transcription'
-        });
-        res.type('text/xml');
-        return res.send(twiml.toString());
+        digitsInput = '0000'; // Forces a wrong passcode so it uses the exact same working failure path
     }
 
     let ownerPhone = null;
@@ -894,7 +885,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         return res.send(twiml.toString());
     }
 
-    // Passcode Match Check
+    // Passcode Match Check (Will fail for our forced '0000' timeout and trigger voicemail!)
     const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
 
     if (isMatch) {
