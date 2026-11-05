@@ -834,9 +834,9 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
 
     console.log(`[Verify Passcode Parsed] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
 
-    // If no one spoke or it timed out, force a wrong passcode to route to voicemail
+    // If it's a timeout fallback or completely blank input, force a wrong passcode to trigger voicemail
     if (isTimeoutFallback || (digitsInput === '' && speechInput === '')) {
-        console.log('[Verify Passcode] Empty input or timeout detected. Forcing "0000" to trigger voicemail path.');
+        console.log('[Verify Passcode] Empty input or silence timeout detected. Forcing "0000" to route to voicemail path.');
         digitsInput = '0000';
     }
 
@@ -857,6 +857,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         if (callQuery.rows.length > 0) {
             ownerPhone = callQuery.rows[0].owner_phone;
             passcode = callQuery.rows[0].passcode || '1234';
+            console.log(`[Verify Passcode DB] Found owner phone and passcode for call.`);
         } else if (To) {
             const userFallback = await dbClient.query(
                 `SELECT u.id, u.owner_phone, u.passcode 
@@ -868,6 +869,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             if (userFallback.rows.length > 0) {
                 ownerPhone = userFallback.rows[0].owner_phone;
                 passcode = userFallback.rows[0].passcode || '1234';
+                console.log(`[Verify Passcode DB] Found fallback user via To number.`);
             }
         }
     } catch (err) {
@@ -888,16 +890,18 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             twiml.say('Owner phone not configured.');
         }
         const responseXml = twiml.toString();
-        console.log('[Verify Passcode] Outgoing TwiML:', responseXml);
+        console.log('[Verify Passcode Outgoing TwiML]:', responseXml);
+        console.log('--------------------------------------------------');
         res.type('text/xml');
         return res.send(responseXml);
     }
 
-    // Passcode Match Check
+    // Passcode Match Check (Will fail for our forced '0000' silence timeout and trigger voicemail!)
     const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
-    console.log(`[Verify Passcode] Passcode Match Result: ${isMatch} (Expected: "${passcode}", Got Digits: "${digitsInput}", Speech: "${speechInput}")`);
+    console.log(`[Verify Passcode Match Check] Result: ${isMatch} (Expected: "${passcode}", Got Digits: "${digitsInput}", Speech: "${speechInput}")`);
 
     if (isMatch) {
+        console.log('[Verify Passcode] Passcode accepted. Connecting call.');
         twiml.say('Passcode accepted. Connecting your call.');
         if (ownerPhone) {
             twiml.dial(ownerPhone);
@@ -905,7 +909,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             twiml.say('Owner phone not configured.');
         }
     } else {
-        console.log('[Verify Passcode] Passcode failed. Triggering voicemail recording.');
+        console.log('[Verify Passcode] Passcode failed or forced timeout. Triggering voicemail recording.');
         twiml.say('Passcode not recognized. Please leave a message after the tone.');
         twiml.record({
             action: '/api/twilio/handle-voicemail',
@@ -917,7 +921,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     }
 
     const responseXml = twiml.toString();
-    console.log('[Verify Passcode] Outgoing TwiML Response:', responseXml);
+    console.log('[Verify Passcode Outgoing TwiML]:', responseXml);
     console.log('--------------------------------------------------');
 
     res.type('text/xml');
