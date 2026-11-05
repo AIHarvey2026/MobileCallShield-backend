@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 3000;
 
 // Trust reverse proxy (Render) for express-rate-limit
 app.set('trust proxy', 1);
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // 2. Database Connection (PostgreSQL on Render)
 const pool = new Pool({
@@ -820,16 +821,16 @@ app.post('/api/twilio/voice', async (req, res) => {
 // Twilio Voice Webhook Handler & Passcode Verification
 // ----------------------------------------------------
 app.post('/api/twilio/verify-passcode', async (req, res) => {
-    const { CallSid, Digits, SpeechResult, To } = req.body;
-    const isTimeoutFallback = req.query.fallback === 'voicemail';
+    const { CallSid, Digits, SpeechResult, To, Confidence } = req.body;
+    const isTimeoutFallback = req.query.fallback === 'voicemail' || !Digits && !SpeechResult;
     const twiml = new VoiceResponse();
 
     const digitsInput = (Digits || '').trim();
-    const speechInput = (SpeechResult || '').toLowerCase();
+    const speechInput = (SpeechResult || '').toLowerCase().trim();
 
     console.log(`[Verify Passcode] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
 
-    // If it timed out or no input was provided, route directly to voicemail instantly!
+    // If it's a timeout, fallback query, or completely blank input -> Voicemail instantly!
     if (isTimeoutFallback || (digitsInput === '' && speechInput === '')) {
         twiml.say('Passcode not recognized. Please leave a message after the tone.');
         twiml.record({
