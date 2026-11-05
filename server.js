@@ -821,6 +821,10 @@ app.post('/api/twilio/voice', async (req, res) => {
 // Twilio Voice Webhook Handler & Passcode Verification
 // ----------------------------------------------------
 app.post('/api/twilio/verify-passcode', async (req, res) => {
+    console.log('--------------------------------------------------');
+    console.log('[Verify Passcode] Incoming Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('[Verify Passcode] Incoming Query Params:', JSON.stringify(req.query, null, 2));
+
     const { CallSid, Digits, SpeechResult, To } = req.body;
     const isTimeoutFallback = req.query.fallback === 'voicemail';
     const twiml = new VoiceResponse();
@@ -828,11 +832,12 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     let digitsInput = (Digits || '').trim();
     let speechInput = (SpeechResult || '').toLowerCase().trim();
 
-    console.log(`[Verify Passcode] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
+    console.log(`[Verify Passcode Parsed] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
 
-    // 🔥 YOUR GENIUS IDEA: If no one spoke or it timed out, force a wrong passcode value!
+    // If no one spoke or it timed out, force a wrong passcode to route to voicemail
     if (isTimeoutFallback || (digitsInput === '' && speechInput === '')) {
-        digitsInput = '0000'; // Forces a wrong passcode so it uses the exact same working failure path
+        console.log('[Verify Passcode] Empty input or timeout detected. Forcing "0000" to trigger voicemail path.');
+        digitsInput = '0000';
     }
 
     let ownerPhone = null;
@@ -875,18 +880,22 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
 
     // Doctor / Medical Override
     if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
+        console.log('[Verify Passcode] Medical override triggered.');
         twiml.say('Connecting your urgent medical call.');
         if (ownerPhone) {
             twiml.dial(ownerPhone);
         } else {
             twiml.say('Owner phone not configured.');
         }
+        const responseXml = twiml.toString();
+        console.log('[Verify Passcode] Outgoing TwiML:', responseXml);
         res.type('text/xml');
-        return res.send(twiml.toString());
+        return res.send(responseXml);
     }
 
-    // Passcode Match Check (Will fail for our forced '0000' timeout and trigger voicemail!)
+    // Passcode Match Check
     const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
+    console.log(`[Verify Passcode] Passcode Match Result: ${isMatch} (Expected: "${passcode}", Got Digits: "${digitsInput}", Speech: "${speechInput}")`);
 
     if (isMatch) {
         twiml.say('Passcode accepted. Connecting your call.');
@@ -896,6 +905,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             twiml.say('Owner phone not configured.');
         }
     } else {
+        console.log('[Verify Passcode] Passcode failed. Triggering voicemail recording.');
         twiml.say('Passcode not recognized. Please leave a message after the tone.');
         twiml.record({
             action: '/api/twilio/handle-voicemail',
@@ -906,8 +916,12 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         });
     }
 
+    const responseXml = twiml.toString();
+    console.log('[Verify Passcode] Outgoing TwiML Response:', responseXml);
+    console.log('--------------------------------------------------');
+
     res.type('text/xml');
-    res.send(twiml.toString());
+    res.send(responseXml);
 });
 
 // ----------------------------------------------------
