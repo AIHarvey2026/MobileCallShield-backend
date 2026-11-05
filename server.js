@@ -788,24 +788,33 @@ app.post('/api/twilio/voice', async (req, res) => {
             if (user.owner_phone) {
                 twiml.dial(user.owner_phone);
             }
-        } else {
+       } else {
             // Send to screening / passcode challenge flow using <Gather>
             const gather = twiml.gather({
                 input: 'speech dtmf',
-                action: '/api/twilio/verify-passcode?fallback=voicemail',
+                action: '/api/twilio/verify-passcode',
                 method: 'POST',
                 timeout: 5,
                 speechTimeout: 'auto'
             });
         
-            
             const greetingName = user.message_name || 'the owner';
             gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
-        } // <--- FIXED: Added the missing closing brace for the 'else' block here!
+
+            // IF SILENCE TIMEOUT HAPPENS (Fall through code):
+            // Twilio executes this directly when the 5-second timer expires with zero input!
+            twiml.say('No passcode received. Please leave a message after the tone.');
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true,
+                transcribeCallback: '/api/twilio/voicemail-transcription'
+            });
+        }
 
         res.type('text/xml');
         res.send(twiml.toString());
-
     } catch (err) {
         console.error('[Twilio Webhook Error] Failed to log or process call:', err);
         const twiml = new VoiceResponse();
