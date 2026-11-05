@@ -883,7 +883,7 @@ app.post('/api/twilio/voice', async (req, res) => {
                 numDigits: 4,
                 action: '/api/twilio/verify-passcode',
                 method: 'POST',
-                timeout: 10,
+                timeout: 5,
                 speechTimeout: 'auto'
             });
             
