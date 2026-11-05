@@ -744,7 +744,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         let ownerPhone = null;
         let passcode = '1234';
 
-        // 1. Try to lookup owner phone and passcode from database safely
         const callQuery = await dbClient.query(
             `SELECT c.user_id, u.owner_phone, u.passcode 
              FROM call_logs c 
@@ -770,7 +769,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             }
         }
 
-        // 2. Check for Doctor / Medical Override (Press 9 or say "doctor" / "medical")
+        // Doctor / Medical Override
         if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
             twiml.say('Connecting your urgent medical call.');
             if (ownerPhone) {
@@ -782,7 +781,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             return res.send(twiml.toString());
         }
 
-        // 3. Check if entered digits or spoken speech matches the user's passcode
+        // Passcode Check
         const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
 
         if (isMatch) {
@@ -793,7 +792,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
                 twiml.say('Owner phone not configured.');
             }
         } else {
-            // 4. FALLBACK: Timeout, wrong passcode, or nothing said -> Route to Voicemail!
+            // Fallback to Voicemail
             twiml.say('Passcode not recognized. Please leave a message after the tone.');
             twiml.record({
                 action: '/api/twilio/handle-voicemail',
@@ -803,12 +802,10 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
                 transcribeCallback: '/api/twilio/voicemail-transcription'
             });
             twiml.say('Thank you for your message. Goodbye.');
-            twiml.hangup();
         }
 
     } catch (err) {
         console.error('[Verify Passcode Error] Failed to process passcode:', err);
-        // Safety Fallback: Even if database errors out, still let them leave a voicemail instead of hanging up
         twiml.say('Please leave a message after the tone.');
         twiml.record({
             action: '/api/twilio/handle-voicemail',
