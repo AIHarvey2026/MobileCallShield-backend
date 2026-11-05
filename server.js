@@ -240,7 +240,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         const userPasscode = passcode || '1234';
         const passwordHash = await bcrypt.hash(String(password), 10);
         
-        // Setup security question and answer with defaults if empty
         const finalQuestion = securityQuestion && securityQuestion.trim() !== '' 
             ? securityQuestion.trim() 
             : "What was the name of your first pet?";
@@ -272,13 +271,11 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             const phoneRow = availablePhoneQuery.rows[0];
             assignedPhoneNumber = phoneRow.phone_number;
             
-            // 1. Assign number in twilio_numbers inventory table
             await client.query(
                 `UPDATE twilio_numbers SET user_id = $1, is_active = true WHERE id = $2`,
                 [newUserId, phoneRow.id]
             );
 
-            // 2. Sync twilio_screening_number column in users table
             await client.query(
                 `UPDATE users SET twilio_screening_number = $1 WHERE id = $2`,
                 [assignedPhoneNumber, newUserId]
@@ -654,7 +651,6 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 
     try {
-        // Fetch user's stored PIN and passcode from database
         const userResult = await pool.query('SELECT id, pin, passcode FROM users WHERE id = $1', [userId]);
 
         if (userResult.rows.length === 0) {
@@ -663,17 +659,14 @@ app.post('/api/settings/update-passcode', async (req, res) => {
 
         const user = userResult.rows[0];
 
-        // 1. Verify Owner PIN matches
         if (String(user.pin).trim() !== String(pin).trim()) {
             return res.status(401).json({ success: false, error: 'Incorrect Owner PIN.' });
         }
 
-        // 2. Verify Current Passcode matches to prevent accidental changes
         if (String(user.passcode).trim().toLowerCase() !== String(currentPasscode).trim().toLowerCase()) {
             return res.status(401).json({ success: false, error: 'Current passcode phrase does not match.' });
         }
 
-        // 3. Update to the new passcode
         const result = await pool.query(
             'UPDATE users SET passcode = $1 WHERE id = $2 RETURNING id, passcode',
             [newPasscode.trim(), userId]
@@ -691,22 +684,18 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     }
 });
 
-
-
 // ----------------------------------------------------
-// Caller Line-Type & Behavioral Intelligence Helper
+// Asynchronous Caller Line-Type & Risk Evaluation
 // ----------------------------------------------------
-async function evaluateIncomingCaller(phoneNumber, userId) {
+async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
     try {
-        // 1. Check Twilio Lookup API for Line Type & Carrier
         const lookupResult = await twilioClient.lookups.v2.phoneNumbers(phoneNumber)
-    .fetch({ fields: ['line_type_intelligence'] });
+            .fetch({ fields: ['line_type_intelligence'] });
 
         const lineTypeData = lookupResult.lineTypeIntelligence;
-        const lineType = lineTypeData?.type || 'unknown'; // 'mobile', 'landline', 'voip'
+        const lineType = (lineTypeData?.type || 'UNKNOWN').toUpperCase();
         const carrierName = lineTypeData?.carrierName || 'Unknown Carrier';
 
-        // 2. Check Call Frequency / Velocity in PostgreSQL (Has this number called repeatedly?)
         const frequencyQuery = `
             SELECT COUNT(*) AS call_count 
             FROM call_logs 
@@ -716,57 +705,30 @@ async function evaluateIncomingCaller(phoneNumber, userId) {
         const freqResult = await pool.query(frequencyQuery, [phoneNumber]);
         const callCount = parseInt(freqResult.rows[0].call_count, 10) || 0;
 
-        // 3. Determine Risk Level, Color, and Label
-        let riskLevel = 'safe';
-        let colorCode = 'green';
-        let label = 'Verified Safe';
-
-        if (lineType === 'voip') {
-            riskLevel = 'high_risk';
-            colorCode = 'red';
+        let label = 'Standard Mobile Line';
+        if (lineType === 'VOIP') {
             label = '⚠️ VoIP Burner (High Scam Risk)';
         } else if (callCount >= 3) {
-            riskLevel = 'suspicious';
-            colorCode = 'yellow';
             label = '⚠️ Suspicious Mobile (Frequent Caller)';
-        } else if (lineType === 'landline') {
-            riskLevel = 'moderate';
-            colorCode = 'yellow';
+        } else if (lineType === 'LANDLINE') {
             label = 'Landline / Business Line';
-        } else {
-            riskLevel = 'safe';
-            colorCode = 'green';
-            label = 'Standard Mobile Line';
         }
 
-        return {
-            phoneNumber,
-            lineType: lineType.toUpperCase(),
-            carrier: carrierName,
-            recentCallCount: callCount,
-            riskLevel,
-            colorCode,
-            label
-        };
+        await pool.query(
+            `UPDATE call_logs 
+             SET line_type = $1, carrier = $2, risk_label = $3 
+             WHERE call_sid = $4`,
+            [lineType, carrierName, label, CallSid]
+        );
+        console.log(`[Lookup Complete] Call SID ${CallSid}: Line=${lineType}, Carrier=${carrierName}`);
 
     } catch (err) {
-        console.error('[EVALUATE] Error evaluating caller:', err);
-        return {
-            phoneNumber,
-            lineType: 'UNKNOWN',
-            carrier: 'Unknown',
-            recentCallCount: 0,
-            riskLevel: 'unknown',
-            colorCode: 'gray',
-            label: 'Unverified Line'
-        };
+        console.error('[EVALUATE BACKGROUND] Error fetching Twilio lookup:', err);
     }
 }
 
-
-
 // ----------------------------------------------------
-// Twilio Voice Webhook Handler & Call Logger
+// Twilio Voice Webhook Handler & Passcode Verification
 // ----------------------------------------------------
 app.post('/api/twilio/verify-passcode', async (req, res) => {
     const { CallSid, Digits, SpeechResult, To } = req.body;
@@ -779,7 +741,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
 
     const dbClient = await pool.connect();
     try {
-        // 1. Lookup the user and owner phone using call_sid or fallback to the To number
         let callQuery = await dbClient.query(
             `SELECT c.user_id, u.owner_phone, u.passcode 
              FROM call_logs c 
@@ -795,7 +756,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             ownerPhone = callQuery.rows[0].owner_phone;
             passcode = callQuery.rows[0].passcode || '1234';
         } else if (To) {
-            // Fallback lookup via twilio_numbers if call_log wasn't found
             const userFallback = await dbClient.query(
                 `SELECT u.id, u.owner_phone, u.passcode 
                  FROM users u 
@@ -809,7 +769,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             }
         }
 
-        // 2. Check for Doctor / Medical Override (Press 9 or say "doctor" / "medical")
         if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
             twiml.say('Connecting your urgent medical call.');
             if (ownerPhone) {
@@ -821,7 +780,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             return res.send(twiml.toString());
         }
 
-        // 3. Check if entered digits or spoken speech matches the user's passcode
         const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
 
         if (isMatch) {
@@ -832,7 +790,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
                 twiml.say('Owner phone not configured.');
             }
         } else {
-            // 4. FALLBACK: Timeout, wrong passcode, or nothing said -> Route to Voicemail!
             twiml.say('Passcode not recognized. Please leave a message after the tone.');
             twiml.record({
                 action: '/api/twilio/handle-voicemail',
@@ -862,6 +819,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     res.type('text/xml');
     res.send(twiml.toString());
 });
+
 app.post('/api/twilio/voice', async (req, res) => {
     const { CallSid, From, To, CallStatus, Direction } = req.body;
     
@@ -869,7 +827,6 @@ app.post('/api/twilio/voice', async (req, res) => {
 
     const dbClient = await pool.connect();
     try {
-        // 1. Find which user owns this Twilio number (including message_name and screening status)
         const userQuery = await dbClient.query(
             `SELECT u.id AS user_id, u.owner_phone, u.is_call_shield_enabled, u.message_name FROM users u 
              JOIN twilio_numbers tn ON u.id = tn.user_id 
@@ -885,21 +842,19 @@ app.post('/api/twilio/voice', async (req, res) => {
         const user = userQuery.rows[0];
         const userId = user.user_id;
 
-        // 2. Evaluate caller line type & behavior
-        const evaluation = await evaluateIncomingCaller(From, userId);
-
-        // 3. Insert or update the call record into the call_logs table
         await dbClient.query(
             `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+             VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'Pending Lookup', 'Evaluating...', NOW())
              ON CONFLICT (call_sid) DO UPDATE 
              SET call_status = EXCLUDED.call_status`,
-            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound', evaluation.lineType, evaluation.carrier, evaluation.label]
+            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound']
         );
+
+        // Run Twilio Lookup asynchronously in the background so call never times out
+        evaluateAndLogCallerAsync(CallSid, From, userId);
 
         const twiml = new VoiceResponse();
 
-        // 4. IF GUARDIAN TURNED OFF CALL SCREENING: Forward immediately without screening
         if (user.is_call_shield_enabled === false) {
             if (user.owner_phone) {
                 twiml.say('Connecting your call.');
@@ -911,7 +866,6 @@ app.post('/api/twilio/voice', async (req, res) => {
             return res.send(twiml.toString());
         }
 
-        // 5. Check if 'From' number is a trusted contact
         const contactCheck = await dbClient.query(
             `SELECT id FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
             [userId, From]
@@ -924,7 +878,6 @@ app.post('/api/twilio/voice', async (req, res) => {
                 twiml.dial(user.owner_phone);
             }
         } else {
-            // Send to screening / passcode challenge flow using <Gather> (Speech + DTMF + Doctor Bypass)
             const gather = twiml.gather({
                 input: 'speech dtmf',
                 numDigits: 4,
@@ -952,14 +905,15 @@ app.post('/api/twilio/voice', async (req, res) => {
     }
 });
 
-// 1. Voicemail Recording Handler Route
+// ----------------------------------------------------
+// Voicemail & Transcription Handlers
+// ----------------------------------------------------
 app.post('/api/twilio/handle-voicemail', async (req, res) => {
     const { CallSid, RecordingUrl } = req.body;
     console.log(`[Voicemail] Recording received for Call SID: ${CallSid}. URL: ${RecordingUrl}`);
 
     const dbClient = await pool.connect();
     try {
-        // Save the recording URL and update status in the call_logs table
         await dbClient.query(
             `UPDATE call_logs 
              SET voicemail_url = $1, call_status = 'voicemail' 
@@ -980,7 +934,6 @@ app.post('/api/twilio/handle-voicemail', async (req, res) => {
     res.send(twiml.toString());
 });
 
-// 2. Transcription Callback Route (Receives the text from Twilio)
 app.post('/api/twilio/voicemail-transcription', async (req, res) => {
     const { CallSid, TranscriptionText, TranscriptionStatus } = req.body;
 
@@ -989,7 +942,6 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
 
         const dbClient = await pool.connect();
         try {
-            // Save the transcribed text into your call_logs table
             await dbClient.query(
                 `UPDATE call_logs 
                  SET voicemail_text = $1 
@@ -1007,7 +959,6 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
 
     res.status(200).send('OK');
 });
-
 
 // ----------------------------------------------------
 // Server Listen
