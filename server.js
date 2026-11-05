@@ -830,9 +830,18 @@ app.post('/api/twilio/voice', async (req, res) => {
                 twiml.dial(user.owner_phone);
             }
         } else {
-            // Send to screening / passcode challenge flow
-            twiml.say('Please enter your passcode to connect.');
-            // Add your <Gather> logic here
+            // Send to screening / passcode challenge flow using <Gather>
+            const gather = twiml.gather({
+                numDigits: 4,
+                action: '/api/twilio/verify-passcode',
+                method: 'POST',
+                timeout: 10
+            });
+            gather.say('Please enter your four digit passcode followed by the pound key to connect.');
+            
+            // Fallback if they don't enter anything
+            twiml.say('We did not receive your passcode. Goodbye.');
+            twiml.hangup();
         }
 
         res.type('text/xml');
@@ -844,11 +853,10 @@ app.post('/api/twilio/voice', async (req, res) => {
         twiml.say('An application error has occurred.');
         res.type('text/xml');
         res.send(twiml.toString());
-  } finally {
+    } finally {
         dbClient.release();
     }
-}); 
-
+});
 
 // ----------------------------------------------------
 // Server Listen
