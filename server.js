@@ -775,9 +775,9 @@ app.post('/api/twilio/voice', async (req, res) => {
 
     const dbClient = await pool.connect();
     try {
-        // 1. Find which user owns this Twilio number (and check screening status)
+        // 1. Find which user owns this Twilio number (including message_name and screening status)
         const userQuery = await dbClient.query(
-            `SELECT u.id AS user_id, u.owner_phone, u.is_call_shield_enabled FROM users u 
+            `SELECT u.id AS user_id, u.owner_phone, u.is_call_shield_enabled, u.message_name FROM users u 
              JOIN twilio_numbers tn ON u.id = tn.user_id 
              WHERE tn.phone_number = $1 LIMIT 1`,
             [To]
@@ -837,7 +837,10 @@ app.post('/api/twilio/voice', async (req, res) => {
                 method: 'POST',
                 timeout: 10
             });
-            gather.say('Please enter your four digit passcode followed by the pound key to connect.');
+            
+            // Use custom message_name if set, otherwise default safely
+            const greetingName = user.message_name || 'the owner';
+            gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please enter your four digit passcode followed by the pound key to connect.`);
             
             // Fallback if they don't enter anything
             twiml.say('We did not receive your passcode. Goodbye.');
