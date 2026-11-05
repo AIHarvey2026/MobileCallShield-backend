@@ -829,6 +829,7 @@ app.post('/api/twilio/voice', async (req, res) => {
 // ----------------------------------------------------
 // Twilio Voice Webhook Handler & Passcode Verification
 // ----------------------------------------------------
+
 app.post('/api/twilio/verify-passcode', async (req, res) => {
     console.log('--------------------------------------------------');
     console.log('[Verify Passcode] Incoming Request Body:', JSON.stringify(req.body, null, 2));
@@ -990,6 +991,28 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
     }
 
     res.status(200).send('OK');
+});
+
+
+// ----------------------------------------------------
+// Call Logs Endpoint for Mobile Clients
+// ----------------------------------------------------
+app.get('/api/call-logs/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT call_sid, from_number, to_number, call_status, direction, line_type, carrier, risk_label, voicemail_url, voicemail_text, created_at 
+             FROM call_logs 
+             WHERE user_id = $1 
+             ORDER BY created_at DESC 
+             LIMIT 50`,
+            [userId]
+        );
+        res.json({ success: true, callLogs: result.rows });
+    } catch (err) {
+        console.error('Error fetching call logs:', err);
+        res.status(500).json({ success: false, error: 'Server error fetching call logs.' });
+    }
 });
 
 // ----------------------------------------------------
