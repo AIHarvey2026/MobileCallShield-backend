@@ -817,6 +817,108 @@ app.post('/api/twilio/voice', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// Twilio Voice Webhook Handler & Passcode Verification
+// ----------------------------------------------------
+app.post('/api/twilio/verify-passcode', async (req, res) => {
+    const { CallSid, Digits, SpeechResult, To } = req.body;
+    const isTimeoutFallback = req.query.fallback === 'voicemail';
+    const twiml = new VoiceResponse();
+
+    const digitsInput = (Digits || '').trim();
+    const speechInput = (SpeechResult || '').toLowerCase();
+
+    console.log(`[Verify Passcode] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
+
+    // If it timed out or no input was provided, route directly to voicemail instantly!
+    if (isTimeoutFallback || (digitsInput === '' && speechInput === '')) {
+        twiml.say('Passcode not recognized. Please leave a message after the tone.');
+        twiml.record({
+            action: '/api/twilio/handle-voicemail',
+            method: 'POST',
+            maxLength: 60,
+            transcribe: true,
+            transcribeCallback: '/api/twilio/voicemail-transcription'
+        });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+    }
+
+    let ownerPhone = null;
+    let passcode = '1234';
+    let dbClient = null;
+
+    try {
+        dbClient = await pool.connect();
+        const callQuery = await dbClient.query(
+            `SELECT c.user_id, u.owner_phone, u.passcode 
+             FROM call_logs c 
+             JOIN users u ON c.user_id = u.id 
+             WHERE c.call_sid = $1 LIMIT 1`,
+            [CallSid]
+        );
+
+        if (callQuery.rows.length > 0) {
+            ownerPhone = callQuery.rows[0].owner_phone;
+            passcode = callQuery.rows[0].passcode || '1234';
+        } else if (To) {
+            const userFallback = await dbClient.query(
+                `SELECT u.id, u.owner_phone, u.passcode 
+                 FROM users u 
+                 JOIN twilio_numbers tn ON u.id = tn.user_id 
+                 WHERE tn.phone_number = $1 LIMIT 1`,
+                [To]
+            );
+            if (userFallback.rows.length > 0) {
+                ownerPhone = userFallback.rows[0].owner_phone;
+                passcode = userFallback.rows[0].passcode || '1234';
+            }
+        }
+    } catch (err) {
+        console.error('[Verify Passcode DB Error]:', err);
+    } finally {
+        if (dbClient) {
+            dbClient.release();
+        }
+    }
+
+    // Doctor / Medical Override
+    if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
+        twiml.say('Connecting your urgent medical call.');
+        if (ownerPhone) {
+            twiml.dial(ownerPhone);
+        } else {
+            twiml.say('Owner phone not configured.');
+        }
+        res.type('text/xml');
+        return res.send(twiml.toString());
+    }
+
+    // Passcode Match Check
+    const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
+
+    if (isMatch) {
+        twiml.say('Passcode accepted. Connecting your call.');
+        if (ownerPhone) {
+            twiml.dial(ownerPhone);
+        } else {
+            twiml.say('Owner phone not configured.');
+        }
+    } else {
+        twiml.say('Passcode not recognized. Please leave a message after the tone.');
+        twiml.record({
+            action: '/api/twilio/handle-voicemail',
+            method: 'POST',
+            maxLength: 60,
+            transcribe: true,
+            transcribeCallback: '/api/twilio/voicemail-transcription'
+        });
+    }
+
+    res.type('text/xml');
+    res.send(twiml.toString());
+});
+
+// ----------------------------------------------------
 // Voicemail & Transcription Handlers
 // ----------------------------------------------------
 app.post('/api/twilio/handle-voicemail', async (req, res) => {
