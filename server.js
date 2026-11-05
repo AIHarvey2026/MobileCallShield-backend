@@ -792,12 +792,12 @@ app.post('/api/twilio/voice', async (req, res) => {
             // Send to screening / passcode challenge flow using <Gather>
             const gather = twiml.gather({
                 input: 'speech dtmf',
-                numDigits: 4,
                 action: '/api/twilio/verify-passcode?fallback=voicemail',
                 method: 'POST',
                 timeout: 5,
                 speechTimeout: 'auto'
             });
+        
             
             const greetingName = user.message_name || 'the owner';
             gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
