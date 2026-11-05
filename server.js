@@ -830,20 +830,28 @@ app.post('/api/twilio/voice', async (req, res) => {
                 twiml.dial(user.owner_phone);
             }
         } else {
-            // Send to screening / passcode challenge flow using <Gather>
+            // Send to screening / passcode challenge flow using <Gather> (Speech + DTMF + Doctor Bypass)
             const gather = twiml.gather({
+                input: 'speech dtmf',
                 numDigits: 4,
                 action: '/api/twilio/verify-passcode',
                 method: 'POST',
-                timeout: 10
+                timeout: 10,
+                speechTimeout: 'auto'
             });
             
-            // Use custom message_name if set, otherwise default safely
             const greetingName = user.message_name || 'the owner';
-            gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please enter your four digit passcode followed by the pound key to connect.`);
+            gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please state your four digit passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
             
-            // Fallback if they don't enter anything
-            twiml.say('We did not receive your passcode. Goodbye.');
+            // Fallback: If they don't enter/say a passcode, route them straight to voicemail!
+            twiml.say('Passcode not recognized. Please leave a message after the tone.');
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true
+            });
+            twiml.say('Thank you for your message. Goodbye.');
             twiml.hangup();
         }
 
@@ -860,6 +868,63 @@ app.post('/api/twilio/voice', async (req, res) => {
         dbClient.release();
     }
 });
+
+// 1. Voicemail Recording Handler Route
+app.post('/api/twilio/handle-voicemail', async (req, res) => {
+    const { CallSid, RecordingUrl } = req.body;
+    console.log(`[Voicemail] Recording received for Call SID: ${CallSid}. URL: ${RecordingUrl}`);
+
+    const dbClient = await pool.connect();
+    try {
+        // Save the recording URL and update status in the call_logs table
+        await dbClient.query(
+            `UPDATE call_logs 
+             SET voicemail_url = $1, call_status = 'voicemail' 
+             WHERE call_sid = $2`,
+            [RecordingUrl, CallSid]
+        );
+    } catch (err) {
+        console.error('[Voicemail Error] Failed to update call log with recording URL:', err);
+    } finally {
+        dbClient.release();
+    }
+
+    const twiml = new VoiceResponse();
+    twiml.say('Thank you. Your message has been saved. Goodbye.');
+    twiml.hangup();
+
+    res.type('text/xml');
+    res.send(twiml.toString());
+});
+
+// 2. Transcription Callback Route (Receives the text from Twilio)
+app.post('/api/twilio/voicemail-transcription', async (req, res) => {
+    const { CallSid, TranscriptionText, TranscriptionStatus } = req.body;
+
+    if (TranscriptionStatus === 'completed' && TranscriptionText) {
+        console.log(`[Transcription Success] Call SID ${CallSid}: "${TranscriptionText}"`);
+
+        const dbClient = await pool.connect();
+        try {
+            // Save the transcribed text into your call_logs table
+            await dbClient.query(
+                `UPDATE call_logs 
+                 SET voicemail_text = $1 
+                 WHERE call_sid = $2`,
+                [TranscriptionText, CallSid]
+            );
+        } catch (err) {
+            console.error('[Transcription Error] Failed to save transcript to database:', err);
+        } finally {
+            dbClient.release();
+        }
+    } else {
+        console.log(`[Transcription Status] Call SID ${CallSid} status: ${TranscriptionStatus}`);
+    }
+
+    res.status(200).send('OK');
+});
+
 
 // ----------------------------------------------------
 // Server Listen
