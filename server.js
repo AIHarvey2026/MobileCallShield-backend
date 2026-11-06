@@ -1088,11 +1088,8 @@ cron.schedule('0 * * * *', async () => {
 });
 
 // ----------------------------------------------------
-2. Add an Endpoint to Upsert User Settings
-Add this route to server.js so your app can easily save or update settings (including report_time):
+// Endpoint to Upsert User Settings
 // ----------------------------------------------------
-
-JavaScript
 app.post('/api/user/settings', async (req, res) => {
     const { userId, reportTime, isCallShieldEnabled, messageName } = req.body;
 
