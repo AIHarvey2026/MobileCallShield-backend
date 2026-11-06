@@ -67,6 +67,21 @@ const authLimiter = rateLimit({
     }
 });
 
+// --- Twilio SMS Helper Function ---
+async function sendGuardianSMS(toPhoneNumber, messageBody) {
+    if (!toPhoneNumber) return;
+    try {
+        await twilioClient.messages.create({
+            body: messageBody,
+            from: process.env.TWILIO_PHONE_NUMBER || TWILIO_NUMBER,
+            to: toPhoneNumber
+        });
+        console.log(`[SMS Alert Sent] To: ${toPhoneNumber}`);
+    } catch (err) {
+        console.error('[SMS Alert Error] Failed to send guardian SMS:', err);
+    }
+}
+
 // --- Nodemailer Transporter for Custom Domain (support@mobilecallshield.com) ---
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
@@ -707,10 +722,14 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
         const callCount = parseInt(freqResult.rows[0].call_count, 10) || 0;
 
         let label = 'Standard Mobile Line';
+        let isHighRisk = false;
+
         if (lineType === 'VOIP') {
             label = '⚠️ VoIP Burner (High Scam Risk)';
+            isHighRisk = true;
         } else if (callCount >= 3) {
             label = '⚠️ Suspicious Mobile (Frequent Caller)';
+            isHighRisk = true;
         } else if (lineType === 'LANDLINE') {
             label = 'Landline / Business Line';
         }
@@ -722,6 +741,16 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
             [lineType, carrierName, label, CallSid]
         );
         console.log(`[Lookup Complete] Call SID ${CallSid}: Line=${lineType}, Carrier=${carrierName}`);
+
+        // Automatically send SMS alert if flagged as high risk
+        if (isHighRisk) {
+            const userQuery = await pool.query('SELECT owner_phone FROM users WHERE id = $1', [userId]);
+            if (userQuery.rows.length > 0 && userQuery.rows[0].owner_phone) {
+                const ownerPhone = userQuery.rows[0].owner_phone;
+                const alertMessage = `🛡️ Senior Scam Shield Alert:\nHigh-risk call detected from ${phoneNumber} (${label}). Intercepted by screening system.`;
+                await sendGuardianSMS(ownerPhone, alertMessage);
+            }
+        }
 
     } catch (err) {
         console.error('[EVALUATE BACKGROUND] Error fetching Twilio lookup:', err);
@@ -789,7 +818,6 @@ app.post('/api/twilio/voice', async (req, res) => {
                 twiml.dial(user.owner_phone);
             }
        } else {
-            // Send to screening / passcode challenge flow using <Gather>
             const gather = twiml.gather({
                 input: 'speech dtmf',
                 action: '/api/twilio/verify-passcode',
@@ -801,8 +829,6 @@ app.post('/api/twilio/voice', async (req, res) => {
             const greetingName = user.message_name || 'the owner';
             gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
 
-            // IF SILENCE TIMEOUT HAPPENS (Fall through code):
-            // Twilio executes this directly when the 5-second timer expires with zero input!
             twiml.say('No passcode received. Please leave a message after the tone.');
             twiml.record({
                 action: '/api/twilio/handle-voicemail',
@@ -826,15 +852,7 @@ app.post('/api/twilio/voice', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
-// Twilio Voice Webhook Handler & Passcode Verification
-// ----------------------------------------------------
-
 app.post('/api/twilio/verify-passcode', async (req, res) => {
-    console.log('--------------------------------------------------');
-    console.log('[Verify Passcode] Incoming Request Body:', JSON.stringify(req.body, null, 2));
-    console.log('[Verify Passcode] Incoming Query Params:', JSON.stringify(req.query, null, 2));
-
     const { CallSid, Digits, SpeechResult, To } = req.body;
     const isTimeoutFallback = req.query.fallback === 'voicemail';
     const twiml = new VoiceResponse();
@@ -842,11 +860,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     let digitsInput = (Digits || '').trim();
     let speechInput = (SpeechResult || '').toLowerCase().trim();
 
-    console.log(`[Verify Passcode Parsed] CallSID: ${CallSid}, Digits: "${digitsInput}", Speech: "${speechInput}", Fallback: ${isTimeoutFallback}`);
-
-    // If it's a timeout fallback or completely blank input, force a wrong passcode to trigger voicemail
     if (isTimeoutFallback || (digitsInput === '' && speechInput === '')) {
-        console.log('[Verify Passcode] Empty input or silence timeout detected. Forcing "0000" to route to voicemail path.');
         digitsInput = '0000';
     }
 
@@ -867,7 +881,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         if (callQuery.rows.length > 0) {
             ownerPhone = callQuery.rows[0].owner_phone;
             passcode = callQuery.rows[0].passcode || '1234';
-            console.log(`[Verify Passcode DB] Found owner phone and passcode for call.`);
         } else if (To) {
             const userFallback = await dbClient.query(
                 `SELECT u.id, u.owner_phone, u.passcode 
@@ -879,7 +892,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             if (userFallback.rows.length > 0) {
                 ownerPhone = userFallback.rows[0].owner_phone;
                 passcode = userFallback.rows[0].passcode || '1234';
-                console.log(`[Verify Passcode DB] Found fallback user via To number.`);
             }
         }
     } catch (err) {
@@ -890,28 +902,20 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         }
     }
 
-    // Doctor / Medical Override
     if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
-        console.log('[Verify Passcode] Medical override triggered.');
         twiml.say('Connecting your urgent medical call.');
         if (ownerPhone) {
             twiml.dial(ownerPhone);
         } else {
             twiml.say('Owner phone not configured.');
         }
-        const responseXml = twiml.toString();
-        console.log('[Verify Passcode Outgoing TwiML]:', responseXml);
-        console.log('--------------------------------------------------');
         res.type('text/xml');
-        return res.send(responseXml);
+        return res.send(twiml.toString());
     }
 
-    // Passcode Match Check (Will fail for our forced '0000' silence timeout and trigger voicemail!)
     const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
-    console.log(`[Verify Passcode Match Check] Result: ${isMatch} (Expected: "${passcode}", Got Digits: "${digitsInput}", Speech: "${speechInput}")`);
 
     if (isMatch) {
-        console.log('[Verify Passcode] Passcode accepted. Connecting call.');
         twiml.say('Passcode accepted. Connecting your call.');
         if (ownerPhone) {
             twiml.dial(ownerPhone);
@@ -919,7 +923,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             twiml.say('Owner phone not configured.');
         }
     } else {
-        console.log('[Verify Passcode] Passcode failed or forced timeout. Triggering voicemail recording.');
         twiml.say('Passcode not recognized. Please leave a message after the tone.');
         twiml.record({
             action: '/api/twilio/handle-voicemail',
@@ -930,12 +933,8 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         });
     }
 
-    const responseXml = twiml.toString();
-    console.log('[Verify Passcode Outgoing TwiML]:', responseXml);
-    console.log('--------------------------------------------------');
-
     res.type('text/xml');
-    res.send(responseXml);
+    res.send(twiml.toString());
 });
 
 // ----------------------------------------------------
@@ -947,14 +946,31 @@ app.post('/api/twilio/handle-voicemail', async (req, res) => {
 
     const dbClient = await pool.connect();
     try {
-        await dbClient.query(
+        const updateResult = await dbClient.query(
             `UPDATE call_logs 
              SET voicemail_url = $1, call_status = 'voicemail' 
-             WHERE call_sid = $2`,
+             WHERE call_sid = $2 
+             RETURNING user_id, from_number`,
             [RecordingUrl, CallSid]
         );
+
+        if (updateResult.rows.length > 0) {
+            const { user_id, from_number } = updateResult.rows[0];
+
+            const userQuery = await dbClient.query(
+                'SELECT owner_phone FROM users WHERE id = $1',
+                [user_id]
+            );
+
+            if (userQuery.rows.length > 0 && userQuery.rows[0].owner_phone) {
+                const guardianPhone = userQuery.rows[0].owner_phone;
+                const alertMessage = `🛡️ Senior Scam Shield Alert:\nNew voicemail recorded from unknown caller ${from_number}. Check your app to listen.`;
+                
+                await sendGuardianSMS(guardianPhone, alertMessage);
+            }
+        }
     } catch (err) {
-        console.error('[Voicemail Error] Failed to update call log with recording URL:', err);
+        console.error('[Voicemail Error] Failed to update call log or send SMS:', err);
     } finally {
         dbClient.release();
     }
@@ -992,7 +1008,6 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
 
     res.status(200).send('OK');
 });
-
 
 // ----------------------------------------------------
 // Call Logs Endpoint for Mobile Clients
