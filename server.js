@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 const bodyParser = require('body-parser');
 const { profanity } = require('@2toad/profanity');
+const cron = require('node-cron'); // <--- ADD THIS LINE
 
 // 1. Initialize Express FIRST
 const app = express();
