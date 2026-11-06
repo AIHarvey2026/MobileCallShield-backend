@@ -1030,6 +1030,96 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     }
 });
 
+
+// ----------------------------------------------------
+// Hourly Check for Custom Daily Call Reports
+// ----------------------------------------------------
+cron.schedule('0 * * * *', async () => {
+    try {
+        const now = new Date();
+        const currentHourStr = String(now.getHours()).padStart(2, '0') + ':00';
+        
+        console.log(`[Cron Job] Checking scheduled daily reports matching: ${currentHourStr}`);
+
+        // Join users and user_settings to check preferred report_time
+        const usersQuery = `
+            SELECT u.id, u.user_name, u.owner_phone 
+            FROM users u
+            JOIN user_settings s ON u.id = s.user_id
+            WHERE u.owner_phone IS NOT NULL 
+              AND u.is_active = true 
+              AND s.report_time LIKE $1
+        `;
+        
+        const usersResult = await pool.query(usersQuery, [`${currentHourStr.split(':')[0]}:%`]);
+        
+        for (const user of usersResult.rows) {
+            const userId = user.id;
+            const ownerPhone = user.owner_phone;
+
+            const summaryQuery = `
+                SELECT 
+                    COUNT(*) AS total_calls,
+                    SUM(CASE WHEN risk_label LIKE '%VoIP%' OR risk_label LIKE '%High Risk%' THEN 1 ELSE 0 END) AS high_risk_count,
+                    SUM(CASE WHEN call_status = 'voicemail' THEN 1 ELSE 0 END) AS voicemail_count
+                FROM call_logs 
+                WHERE user_id = $1 
+                  AND created_at >= NOW() - INTERVAL '24 hours';
+            `;
+            
+            const statsResult = await pool.query(summaryQuery, [userId]);
+            const stats = statsResult.rows[0];
+            const totalCalls = parseInt(stats.total_calls, 10) || 0;
+
+            if (totalCalls > 0) {
+                const reportMessage = `📊 Senior Scam Shield Scheduled Report:\n` +
+                    `- Total Calls Intercepted: ${totalCalls}\n` +
+                    `- High-Risk / VoIP Calls: ${stats.high_risk_count}\n` +
+                    `- Voicemails Recorded: ${stats.voicemail_count}\n` +
+                    `Check your app for full details.`;
+
+                await sendGuardianSMS(ownerPhone, reportMessage);
+                console.log(`[Scheduled Report Sent] To user ${userId} (${ownerPhone}) at ${currentHourStr}`);
+            }
+        }
+    } catch (err) {
+        console.error('[Cron Job Error] Failed to process scheduled daily reports:', err);
+    }
+});
+
+// ----------------------------------------------------
+2. Add an Endpoint to Upsert User Settings
+Add this route to server.js so your app can easily save or update settings (including report_time):
+// ----------------------------------------------------
+
+JavaScript
+app.post('/api/user/settings', async (req, res) => {
+    const { userId, reportTime, isCallShieldEnabled, messageName } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ success: false, error: 'User ID is required.' });
+    }
+
+    try {
+        const upsertQuery = `
+            INSERT INTO user_settings (user_id, report_time, is_call_shield_enabled, message_name, updated_at)
+            VALUES ($1, COALESCE($2, '20:00'), COALESCE($3, true), $4, NOW())
+            ON CONFLICT (user_id) 
+            DO UPDATE SET 
+                report_time = COALESCE(EXCLUDED.report_time, user_settings.report_time),
+                is_call_shield_enabled = COALESCE(EXCLUDED.is_call_shield_enabled, user_settings.is_call_shield_enabled),
+                message_name = COALESCE(EXCLUDED.message_name, user_settings.message_name),
+                updated_at = NOW();
+        `;
+
+        await pool.query(upsertQuery, [userId, reportTime, isCallShieldEnabled, messageName]);
+        res.json({ success: true, message: 'User settings updated successfully.' });
+    } catch (err) {
+        console.error('Error updating user settings:', err);
+        res.status(500).json({ success: false, error: 'Server error updating settings.' });
+    }
+});
+
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
