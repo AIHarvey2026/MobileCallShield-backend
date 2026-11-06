@@ -1033,31 +1033,34 @@ app.get('/api/call-logs/:userId', async (req, res) => {
 
 
 // ----------------------------------------------------
-// Hourly Check for Custom Daily Call Reports
+// Multi-Guardian Scheduled Daily Report Sweep (Runs every hour)
 // ----------------------------------------------------
 cron.schedule('0 * * * *', async () => {
     try {
         const now = new Date();
         const currentHourStr = String(now.getHours()).padStart(2, '0') + ':00';
-        
-        console.log(`[Cron Job] Checking scheduled daily reports matching: ${currentHourStr}`);
 
-        // Join users and user_settings to check preferred report_time
-        const usersQuery = `
-            SELECT u.id, u.user_name, u.owner_phone 
-            FROM users u
-            JOIN user_settings s ON u.id = s.user_id
-            WHERE u.owner_phone IS NOT NULL 
-              AND u.is_active = true 
-              AND s.report_time LIKE $1
+        console.log(`[Cron Job] Checking guardian report schedules matching hour: ${currentHourStr}`);
+
+        // Fetch each guardian setting row matching current hour
+        const guardiansQuery = `
+            SELECT 
+                grs.owner_id,
+                grs.guardian_id,
+                grs.guardian_phone
+            FROM guardian_report_settings grs
+            JOIN users u ON grs.owner_id = u.id
+            WHERE u.is_active = true 
+              AND grs.daily_report_enabled = true 
+              AND grs.report_time LIKE $1
         `;
-        
-        const usersResult = await pool.query(usersQuery, [`${currentHourStr.split(':')[0]}:%`]);
-        
-        for (const user of usersResult.rows) {
-            const userId = user.id;
-            const ownerPhone = user.owner_phone;
 
+        const guardiansResult = await pool.query(guardiansQuery, [`${currentHourStr.split(':')[0]}:%`]);
+
+        for (const guardian of guardiansResult.rows) {
+            const { owner_id, guardian_phone } = guardian;
+
+            // Query call statistics for this owner from the last 24 hours
             const summaryQuery = `
                 SELECT 
                     COUNT(*) AS total_calls,
@@ -1067,24 +1070,24 @@ cron.schedule('0 * * * *', async () => {
                 WHERE user_id = $1 
                   AND created_at >= NOW() - INTERVAL '24 hours';
             `;
-            
-            const statsResult = await pool.query(summaryQuery, [userId]);
+
+            const statsResult = await pool.query(summaryQuery, [owner_id]);
             const stats = statsResult.rows[0];
             const totalCalls = parseInt(stats.total_calls, 10) || 0;
 
             if (totalCalls > 0) {
-                const reportMessage = `📊 Senior Scam Shield Scheduled Report:\n` +
+                const reportMessage = `📊 Senior Scam Shield Daily Summary:\n` +
                     `- Total Calls Intercepted: ${totalCalls}\n` +
                     `- High-Risk / VoIP Calls: ${stats.high_risk_count}\n` +
                     `- Voicemails Recorded: ${stats.voicemail_count}\n` +
                     `Check your app for full details.`;
 
-                await sendGuardianSMS(ownerPhone, reportMessage);
-                console.log(`[Scheduled Report Sent] To user ${userId} (${ownerPhone}) at ${currentHourStr}`);
+                await sendGuardianSMS(guardian_phone, reportMessage);
+                console.log(`[Report Sent] To guardian phone ${guardian_phone} for owner ${owner_id}`);
             }
         }
     } catch (err) {
-        console.error('[Cron Job Error] Failed to process scheduled daily reports:', err);
+        console.error('[Cron Job Error] Failed to process guardian scheduled reports:', err);
     }
 });
 
