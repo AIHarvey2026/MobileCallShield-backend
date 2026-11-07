@@ -497,7 +497,7 @@ app.get('/api/user/profile', async (req, res) => {
             user: {
                 id: user.id,
                 email: user.email,
-                carrier_name: user.carrier_name, // Added carrier_name here!
+                carrier_name: user.carrier_name, // Added carrier_name
                 assignedTwilioNumber: user.twilio_screening_number, 
                 subscriptionStatus: user.subscription_status
             }
