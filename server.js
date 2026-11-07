@@ -483,7 +483,7 @@ app.get('/api/user/profile', async (req, res) => {
     try {
         const userId = req.query.userId;
         const result = await pool.query(
-            'SELECT id, email, twilio_screening_number, subscription_status FROM users WHERE id = $1',
+            'SELECT id, email, carrier_name, twilio_screening_number, subscription_status FROM users WHERE id = $1',
             [userId]
         );
 
@@ -497,6 +497,7 @@ app.get('/api/user/profile', async (req, res) => {
             user: {
                 id: user.id,
                 email: user.email,
+                carrier_name: user.carrier_name, // Added carrier_name here!
                 assignedTwilioNumber: user.twilio_screening_number, 
                 subscriptionStatus: user.subscription_status
             }
