@@ -13,6 +13,7 @@ const bodyParser = require('body-parser');
 const { profanity } = require('@2toad/profanity');
 const cron = require('node-cron'); // <--- ADD THIS LINE
 
+
 // 1. Initialize Express FIRST
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1138,7 +1139,6 @@ app.post('/api/user/settings', async (req, res) => {
     }
 });
 
-const twilio = require('twilio');
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 /**
