@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 const bodyParser = require('body-parser');
 const { profanity } = require('@2toad/profanity');
-const cron = require('node-cron'); // <--- ADD THIS LINE
+const cron = require('node-cron'); 
 
 
 // 1. Initialize Express FIRST
@@ -1139,13 +1139,6 @@ app.post('/api/user/settings', async (req, res) => {
     }
 });
 
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-/**
-
-// ----------------------------------------------------
-// Regional Hub Inventory Endpoints
-// ----------------------------------------------------
 // ----------------------------------------------------
 // Regional Hub Inventory Endpoints
 // ----------------------------------------------------
