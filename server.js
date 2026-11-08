@@ -278,15 +278,46 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         const newUserId = newUser.rows[0].id;
 
-        const availablePhoneQuery = await client.query(
-            `SELECT id, phone_number FROM twilio_numbers
-             WHERE is_active = false OR user_id IS NULL
-             ORDER BY id ASC LIMIT 1 FOR UPDATE`
-        );
-
+        // -------------------------------------------------------------------------
+        // Regional Hub Phone Number Assignment Logic
+        // -------------------------------------------------------------------------
         let assignedPhoneNumber = null;
-        if (availablePhoneQuery.rows.length > 0) {
-            const phoneRow = availablePhoneQuery.rows[0];
+        let phoneRow = null;
+
+        if (realPhone) {
+            const cleanDigits = realPhone.replace(/\D/g, '');
+            const userAreaCode = cleanDigits.length >= 10 ? cleanDigits.slice(-10, -7) : null;
+
+            if (userAreaCode) {
+                // Try to find an unassigned number matching the user's regional hub area code
+                const hubMatchQuery = await client.query(
+                    `SELECT n.id, n.phone_number FROM twilio_numbers n
+                     JOIN hub_area_codes ac ON n.hub_id = ac.hub_id
+                     WHERE ac.area_code = $1 AND (n.is_active = false OR n.user_id IS NULL)
+                     ORDER BY n.id ASC LIMIT 1 FOR UPDATE`,
+                    [userAreaCode]
+                );
+
+                if (hubMatchQuery.rows.length > 0) {
+                    phoneRow = hubMatchQuery.rows[0];
+                }
+            }
+        }
+
+        // Fallback: If no local hub match found, grab any available unassigned number globally
+        if (!phoneRow) {
+            const fallbackQuery = await client.query(
+                `SELECT id, phone_number FROM twilio_numbers
+                 WHERE is_active = false OR user_id IS NULL
+                 ORDER BY id ASC LIMIT 1 FOR UPDATE`
+            );
+            if (fallbackQuery.rows.length > 0) {
+                phoneRow = fallbackQuery.rows[0];
+            }
+        }
+
+        // Assign the selected number to the new user
+        if (phoneRow) {
             assignedPhoneNumber = phoneRow.phone_number;
             
             await client.query(
@@ -299,6 +330,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 [assignedPhoneNumber, newUserId]
             );
         }
+        // -------------------------------------------------------------------------
 
         await client.query('COMMIT');
 
