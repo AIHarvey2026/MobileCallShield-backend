@@ -1296,6 +1296,33 @@ async function checkAllHubsInventoryAndAlert() {
 }
 
 // ----------------------------------------------------
+// Messaging
+// ----------------------------------------------------
+
+app.post('/api/webhook/sms', async (req, res) => {
+    try {
+        const { from, to, text } = req.body;
+        console.log(`📩 Incoming text from ${from} to ${to}: "${text}"`);
+
+        // Check for common sales/political trigger words or spam patterns
+        const spamKeywords = ['vote', 'elect', 'campaign', 'sale', 'offer', 'discount', 'deal expires'];
+        const isSpam = spamKeywords.some(keyword => text.toLowerCase().includes(keyword));
+
+        if (isSpam) {
+            console.log(`🛑 Blocked spam text from ${from}`);
+            // Optionally reply with an automatic STOP or drop it entirely
+            return res.status(200).json({ status: 'blocked' });
+        }
+
+        // If it's a legitimate text, you could forward a notification or store it
+        res.status(200).json({ status: 'received' });
+    } catch (err) {
+        console.error('Error handling SMS webhook:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
 app.listen(PORT, '0.0.0.0', () => {
