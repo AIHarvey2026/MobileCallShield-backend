@@ -1155,7 +1155,7 @@ app.get('/api/admin/regional-hubs-stats', async (req, res) => {
                 h.id AS hub_id,
                 h.hub_code,
                 h.hub_name,
-                STRING_AGG(DISTINCT ac.area_code, ', ') AS area_codes,  /* <--- ADD DISTINCT HERE */
+                STRING_AGG(DISTINCT ac.area_code, ', ') AS area_codes,
                 COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned')::integer AS unassigned_count,
                 COUNT(n.id)::integer AS total_count
             FROM regional_hubs h
