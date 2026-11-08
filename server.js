@@ -1145,6 +1145,9 @@ const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TO
 // ----------------------------------------------------
 // Regional Hub Inventory Endpoints
 // ----------------------------------------------------
+// ----------------------------------------------------
+// Regional Hub Inventory Endpoints
+// ----------------------------------------------------
 app.get('/api/admin/regional-hubs-stats', async (req, res) => {
     try {
         const query = `
@@ -1152,7 +1155,7 @@ app.get('/api/admin/regional-hubs-stats', async (req, res) => {
                 h.id AS hub_id,
                 h.hub_code,
                 h.hub_name,
-                STRING_AGG(DISTINCT ac.area_code, ', ') AS area_codes,
+                STRING_AGG(DISTINCT ac.area_code, ', ') AS area_codes,  /* <--- ADD DISTINCT HERE */
                 COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned')::integer AS unassigned_count,
                 COUNT(n.id)::integer AS total_count
             FROM regional_hubs h
