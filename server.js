@@ -1138,6 +1138,142 @@ app.post('/api/user/settings', async (req, res) => {
     }
 });
 
+const twilio = require('twilio');
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+/**
+ * 1. Get stats for all regional hubs (Total vs Unassigned counts per hub)
+ */
+app.get('/api/admin/regional-hubs-stats', async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                h.id AS hub_id,
+                h.hub_code,
+                h.hub_name,
+                STRING_AGG(ac.area_code, ', ') AS area_codes,
+                COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned') AS unassigned_count,
+                COUNT(n.id) AS total_count
+            FROM regional_hubs h
+            LEFT JOIN hub_area_codes ac ON h.id = ac.hub_id
+            LEFT JOIN twilio_numbers n ON h.id = n.hub_id AND n.is_active = true
+            WHERE h.is_active = true
+            GROUP BY h.id, h.hub_code, h.hub_name
+            ORDER BY h.id ASC;
+        `;
+        const result = await pool.query(query);
+        res.json({ success: true, hubs: result.rows });
+    } catch (err) {
+        console.error('❌ Error fetching regional hub stats:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+/**
+ * 2. Bulk provision numbers for a specific regional hub
+ */
+app.post('/api/admin/provision-hub-numbers', async (req, res) => {
+    let { hubId, count = 1 } = req.body;
+    count = parseInt(count, 10) || 1;
+
+    try {
+        // Step A: Find available area codes mapped to this hub
+        const acQuery = `SELECT area_code FROM hub_area_codes WHERE hub_id = $1;`;
+        const acResult = await pool.query(acQuery, [hubId]);
+
+        if (acResult.rows.length === 0) {
+            return res.status(400).json({ success: false, error: 'No area codes configured for this hub.' });
+        }
+
+        // Pick the first area code associated with the hub (or rotate if you prefer)
+        const targetAreaCode = acResult.rows[0].area_code;
+        console.log(`🔍 Searching for ${count} numbers in area code ${targetAreaCode} for hub ID ${hubId}...`);
+
+        // Step B: Search available numbers from Twilio
+        const availableNumbers = await client.availablePhoneNumbers('US')
+            .local
+            .list({ areaCode: targetAreaCode, limit: count });
+
+        if (availableNumbers.length === 0) {
+            return res.status(404).json({ success: false, error: `No Twilio numbers available in area code ${targetAreaCode}.` });
+        }
+
+        let addedCount = 0;
+        const newlyAdded = [];
+
+        for (const avail of availableNumbers) {
+            try {
+                // Buy from Twilio and link to your webhook
+                const purchasedNumber = await client.incomingPhoneNumbers.create({
+                    phoneNumber: avail.phoneNumber,
+                    voiceUrl: 'https://mobilecallshield-backend.onrender.com/api/twilio/voice',
+                    voiceMethod: 'POST'
+                });
+
+                // Insert into database with explicit hub reference
+                const insertQuery = `
+                    INSERT INTO twilio_numbers (phone_number, twilio_sid, hub_id, user_id, status, is_active)
+                    VALUES ($1, $2, $3, NULL, 'unassigned', true)
+                    RETURNING id, phone_number, hub_id, status;
+                `;
+                const dbResult = await pool.query(insertQuery, [purchasedNumber.phoneNumber, purchasedNumber.sid, hubId]);
+                newlyAdded.push(dbResult.rows[0]);
+                addedCount++;
+            } catch (purchaseErr) {
+                console.error(`⚠️ Failed to buy ${avail.phoneNumber}:`, purchaseErr.message);
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Successfully provisioned ${addedCount} numbers to hub!`,
+            numbers: newlyAdded
+        });
+
+    } catch (err) {
+        console.error('❌ Error provisioning hub numbers:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+/**
+ * 3. Background Cron Job: Check regional inventories and send alerts if any hub < 5
+ */
+async function checkAllHubsInventoryAndAlert() {
+    try {
+        const query = `
+            SELECT 
+                h.hub_code,
+                h.hub_name,
+                COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned') AS unassigned_count
+            FROM regional_hubs h
+            LEFT JOIN twilio_numbers n ON h.id = n.hub_id AND n.is_active = true
+            WHERE h.is_active = true
+            GROUP BY h.id, h.hub_code, h.hub_name;
+        `;
+        const result = await pool.query(query);
+
+        for (const hub of result.rows) {
+            const count = parseInt(hub.unassigned_count, 10);
+            console.log(`📊 Hub [${hub.hub_name}] unassigned buffer: ${count}`);
+
+            if (count < 5) {
+                const alertMessage = `⚠️ Low Inventory Alert: Regional Hub "${hub.hub_name}" is down to ${count} unassigned numbers. Restock recommended!`;
+                
+                await client.messages.create({
+                    body: alertMessage,
+                    from: process.env.TWILIO_ADMIN_SENDER_NUMBER,
+                    to: process.env.ADMIN_PHONE_NUMBER
+                });
+                console.log(`🚨 Sent low-inventory SMS alert for hub: ${hub.hub_code}`);
+            }
+        }
+    } catch (err) {
+        console.error('❌ Error checking hub inventories:', err);
+    }
+}
+
+
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
