@@ -1142,8 +1142,9 @@ app.post('/api/user/settings', async (req, res) => {
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 /**
- * 1. Get stats for all regional hubs (Total vs Unassigned counts per hub)
- */
+// ----------------------------------------------------
+// Regional Hub Inventory Endpoints
+// ----------------------------------------------------
 app.get('/api/admin/regional-hubs-stats', async (req, res) => {
     try {
         const query = `
@@ -1152,8 +1153,8 @@ app.get('/api/admin/regional-hubs-stats', async (req, res) => {
                 h.hub_code,
                 h.hub_name,
                 STRING_AGG(ac.area_code, ', ') AS area_codes,
-                COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned') AS unassigned_count,
-                COUNT(n.id) AS total_count
+                COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned')::integer AS unassigned_count,
+                COUNT(n.id)::integer AS total_count
             FROM regional_hubs h
             LEFT JOIN hub_area_codes ac ON h.id = ac.hub_id
             LEFT JOIN twilio_numbers n ON h.id = n.hub_id AND n.is_active = true
@@ -1169,15 +1170,11 @@ app.get('/api/admin/regional-hubs-stats', async (req, res) => {
     }
 });
 
-/**
- * 2. Bulk provision numbers for a specific regional hub
- */
 app.post('/api/admin/provision-hub-numbers', async (req, res) => {
     let { hubId, count = 1 } = req.body;
     count = parseInt(count, 10) || 1;
 
     try {
-        // Step A: Find available area codes mapped to this hub
         const acQuery = `SELECT area_code FROM hub_area_codes WHERE hub_id = $1;`;
         const acResult = await pool.query(acQuery, [hubId]);
 
@@ -1185,12 +1182,10 @@ app.post('/api/admin/provision-hub-numbers', async (req, res) => {
             return res.status(400).json({ success: false, error: 'No area codes configured for this hub.' });
         }
 
-        // Pick the first area code associated with the hub (or rotate if you prefer)
         const targetAreaCode = acResult.rows[0].area_code;
         console.log(`🔍 Searching for ${count} numbers in area code ${targetAreaCode} for hub ID ${hubId}...`);
 
-        // Step B: Search available numbers from Twilio
-        const availableNumbers = await client.availablePhoneNumbers('US')
+        const availableNumbers = await twilioClient.availablePhoneNumbers('US')
             .local
             .list({ areaCode: targetAreaCode, limit: count });
 
@@ -1203,14 +1198,12 @@ app.post('/api/admin/provision-hub-numbers', async (req, res) => {
 
         for (const avail of availableNumbers) {
             try {
-                // Buy from Twilio and link to your webhook
-                const purchasedNumber = await client.incomingPhoneNumbers.create({
+                const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({
                     phoneNumber: avail.phoneNumber,
                     voiceUrl: 'https://mobilecallshield-backend.onrender.com/api/twilio/voice',
                     voiceMethod: 'POST'
                 });
 
-                // Insert into database with explicit hub reference
                 const insertQuery = `
                     INSERT INTO twilio_numbers (phone_number, twilio_sid, hub_id, user_id, status, is_active)
                     VALUES ($1, $2, $3, NULL, 'unassigned', true)
@@ -1237,7 +1230,7 @@ app.post('/api/admin/provision-hub-numbers', async (req, res) => {
 });
 
 /**
- * 3. Background Cron Job: Check regional inventories and send alerts if any hub < 5
+ * Background Cron Job: Check regional inventories and send alerts if any hub < 5
  */
 async function checkAllHubsInventoryAndAlert() {
     try {
@@ -1260,7 +1253,7 @@ async function checkAllHubsInventoryAndAlert() {
             if (count < 5) {
                 const alertMessage = `⚠️ Low Inventory Alert: Regional Hub "${hub.hub_name}" is down to ${count} unassigned numbers. Restock recommended!`;
                 
-                await client.messages.create({
+                await twilioClient.messages.create({
                     body: alertMessage,
                     from: process.env.TWILIO_ADMIN_SENDER_NUMBER,
                     to: process.env.ADMIN_PHONE_NUMBER
@@ -1272,7 +1265,6 @@ async function checkAllHubsInventoryAndAlert() {
         console.error('❌ Error checking hub inventories:', err);
     }
 }
-
 
 // ----------------------------------------------------
 // Server Listen
