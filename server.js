@@ -1142,13 +1142,11 @@ app.post('/api/user/settings', async (req, res) => {
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 /**
+
 // ----------------------------------------------------
 // Regional Hub Inventory Endpoints
 // ----------------------------------------------------
-// ----------------------------------------------------
-// Regional Hub Inventory Endpoints
-// ----------------------------------------------------
-app.get('/api/admin/regional-hubs-stats', async (req, res) => {
+app.get('/api/admin/regional-hubs-stats', authenticateToken, async (req, res) => {
     try {
         const query = `
             SELECT 
