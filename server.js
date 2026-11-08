@@ -1277,7 +1277,6 @@ async function checkAllHubsInventoryAndAlert() {
 // ----------------------------------------------------
 // Server Listen
 // ----------------------------------------------------
-const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Mobile Call Shield server running on port ${PORT}`);
 });
