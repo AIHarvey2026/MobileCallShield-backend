@@ -482,29 +482,33 @@ app.put('/api/user/toggle-shield', async (req, res) => {
 app.get('/api/user/profile', async (req, res) => {
     try {
         const userId = req.query.userId;
+        console.log(`[Backend Profile] Incoming request for userId: ${userId}`);
+
         const result = await pool.query(
             'SELECT id, email, carrier_name, twilio_screening_number, subscription_status FROM users WHERE id = $1',
             [userId]
         );
 
         if (result.rows.length === 0) {
+            console.log(`[Backend Profile] User not found for id: ${userId}`);
             return res.status(404).json({ error: 'User not found' });
         }
 
         const user = result.rows[0];
+        console.log(`[Backend Profile] Found user record:`, user);
         
         res.json({
             user: {
                 id: user.id,
                 email: user.email,
-                carrier_name: user.carrier_name, // Added carrier_name
+                carrier_name: user.carrier_name,
                 assignedTwilioNumber: user.twilio_screening_number, 
                 subscriptionStatus: user.subscription_status
             }
         });
 
     } catch (err) {
-        console.error('Error fetching user profile:', err);
+        console.error('[Backend Profile] Error fetching user profile:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -1012,20 +1016,32 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// Call Logs Endpoint for Mobile Clients
+// Call Logs Endpoint for Mobile Clients with Date Filtering
 // ----------------------------------------------------
 app.get('/api/call-logs/:userId', async (req, res) => {
     const { userId } = req.params;
+    const { startDate, endDate } = req.query;
+
     try {
-        const result = await pool.query(
-            `SELECT call_sid, from_number, to_number, call_status, direction, line_type, carrier, risk_label, voicemail_url, voicemail_text, created_at 
-             FROM call_logs 
-             WHERE user_id = $1 
-             ORDER BY created_at DESC 
-             LIMIT 50`,
-            [userId]
-        );
+        let query = `
+            SELECT call_sid, from_number, to_number, call_status, direction, line_type, carrier, risk_label, voicemail_url, voicemail_text, created_at 
+            FROM call_logs 
+            WHERE user_id = $1
+        `;
+        
+        let queryParams = [userId];
+
+        // If a date range is provided from the app (Today, Last 7 Days, Last 30 Days)
+        if (startDate && endDate) {
+            query += ` AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`;
+            queryParams.push(startDate, endDate);
+        }
+
+        query += ` ORDER BY created_at DESC LIMIT 100`;
+
+        const result = await pool.query(query, queryParams);
         res.json({ success: true, callLogs: result.rows });
+
     } catch (err) {
         console.error('Error fetching call logs:', err);
         res.status(500).json({ success: false, error: 'Server error fetching call logs.' });
