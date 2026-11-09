@@ -255,7 +255,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
 
-        const userPasscode = passcode || '1234';
+      const userPasscode = passcode ? passcode.trim().toLowerCase() : '1234';
         const passwordHash = await bcrypt.hash(String(password), 10);
         
         const finalQuestion = securityQuestion && securityQuestion.trim() !== '' 
@@ -895,6 +895,12 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     const { CallSid, Digits, SpeechResult, To } = req.body;
     const isTimeoutFallback = req.query.fallback === 'voicemail';
     const twiml = new VoiceResponse();
+    // Normalize the database passcode to lowercase for a reliable case-insensitive comparison
+    const normalizedPasscode = String(passcode || '1234').trim().toLowerCase();
+
+    // Check match against keypad digits or lowercase speech input
+    const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
+    
 
     let digitsInput = (Digits || '').trim();
     let speechInput = (SpeechResult || '').toLowerCase().trim();
