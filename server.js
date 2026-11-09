@@ -895,6 +895,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     const { CallSid, Digits, SpeechResult, To } = req.body;
     const isTimeoutFallback = req.query.fallback === 'voicemail';
     const twiml = new VoiceResponse();
+
     // Normalize the database passcode to lowercase for a reliable case-insensitive comparison
     const normalizedPasscode = String(passcode || '1234').trim().toLowerCase();
 
@@ -957,9 +958,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         res.type('text/xml');
         return res.send(twiml.toString());
     }
-
-    const normalizedPasscode = String(passcode || '1234').trim().toLowerCase();
-    const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
 
     if (isMatch) {
         twiml.say('Passcode accepted. Connecting your call.');
