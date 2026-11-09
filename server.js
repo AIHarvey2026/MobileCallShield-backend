@@ -1199,6 +1199,52 @@ app.get('/api/admin/regional-hubs-stats', authenticateToken, async (req, res) =>
     }
 });
 
+
+// Example route for provisioning a regional hub number
+async function provisionHubNumber(req, res) {
+    try {
+        const { areaCode, hubId } = req.body;
+
+        // 1. Search for an available phone number in the requested area code
+        const availableNumbers = await client.availablePhoneNumbers('US')
+            .local
+            .list({ areaCode: areaCode, limit: 1 });
+
+        if (!availableNumbers || availableNumbers.length === 0) {
+            return res.status(400).json({ error: "No available phone numbers found for this area code." });
+        }
+
+        const targetNumber = availableNumbers[0].phoneNumber;
+
+        // 2. Purchase the number AND automatically configure its webhook URLs
+        const purchasedNumber = await client.incomingPhoneNumbers.create({
+            phoneNumber: targetNumber,
+            // Automatically points incoming calls to your Render backend voice handler
+            voiceUrl: 'https://mobilecallshield-backend.onrender.com/api/twilio/voice',
+            voiceMethod: 'POST',
+            // Optional: status callback for tracking call lifecycle events
+            statusCallback: 'https://mobilecallshield-backend.onrender.com/api/twilio/call-status',
+            statusCallbackMethod: 'POST'
+        });
+
+        // 3. Save the provisioned number and its details into your PostgreSQL database
+        // const query = 'INSERT INTO regional_hub_numbers (hub_id, phone_number, sid) VALUES ($1, $2, $3)';
+        // await db.query(query, [hubId, purchasedNumber.phoneNumber, purchasedNumber.sid]);
+
+        return res.status(200).json({
+            success: true,
+            phoneNumber: purchasedNumber.phoneNumber,
+            sid: purchasedNumber.sid,
+            message: "Number provisioned and webhooks configured successfully!"
+        });
+
+    } catch (error) {
+        console.error("Error provisioning Twilio number:", error);
+        return res.status(500).json({ error: error.message });
+    }
+}
+
+
 app.post('/api/admin/provision-hub-numbers', async (req, res) => {
     let { hubId, count = 1 } = req.body;
     count = parseInt(count, 10) || 1;
