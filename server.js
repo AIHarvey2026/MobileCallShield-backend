@@ -668,6 +668,61 @@ app.patch('/api/trusted-contacts/:contactId/guardian', async (req, res) => {
     }
 });
 
+//Update for trusted_contacts
+app.put('/api/trusted_contacts/:id', async (req, res) => {
+    const contactId = req.params.id;
+    const { name, phone_number, relationship, is_guardian, is_primary } = req.body;
+    let dbClient = null;
+
+    try {
+        dbClient = await pool.connect();
+        
+        // Optional: If setting this contact as primary, you might want to 
+        // unset primary for any other contacts belonging to the same user first.
+        if (is_primary) {
+            // Get user_id for this contact first to scope the reset
+            const contactCheck = await dbClient.query(`SELECT user_id FROM trusted_contacts WHERE id = $1`, [contactId]);
+            if (contactCheck.rows.length > 0) {
+                const userId = contactCheck.rows[0].user_id;
+                await dbClient.query(
+                    `UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1 AND id != $2`,
+                    [userId, contactId]
+                );
+            }
+        }
+
+        const updateQuery = await dbClient.query(
+            `UPDATE trusted_contacts 
+             SET name = COALESCE($1, name), 
+                 phone_number = COALESCE($2, phone_number), 
+                 relationship = COALESCE($3, relationship),
+                 is_guardian = COALESCE($4, is_guardian),
+                 is_primary = COALESCE($5, is_primary),
+                 updated_at = NOW()
+             WHERE id = $6 
+             RETURNING *`,
+            [name, phone_number, relationship, is_guardian, is_primary, contactId]
+        );
+
+        if (updateQuery.rows.length === 0) {
+            return res.status(404).json({ error: 'Trusted contact not found' });
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Contact updated successfully', 
+            contact: updateQuery.rows[0] 
+        });
+    } catch (err) {
+        console.error('[Update Trusted Contact Error]:', err);
+        res.status(500).json({ error: 'Failed to update contact' });
+    } finally {
+        if (dbClient) {
+            dbClient.release();
+        }
+    }
+});
+
 app.put('/api/user/update-pin', async (req, res) => {
     const { userId, newPin, pin } = req.body;
     const targetUserId = userId || req.user.id;
