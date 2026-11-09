@@ -947,7 +947,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         }
     }
 
-    if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
+   if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
         twiml.say('Connecting your urgent medical call.');
         if (ownerPhone) {
             twiml.dial(ownerPhone);
@@ -958,10 +958,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         return res.send(twiml.toString());
     }
 
-    // Normalize the database passcode to lowercase for a reliable case-insensitive comparison
     const normalizedPasscode = String(passcode || '1234').trim().toLowerCase();
-
-    // Check match against keypad digits or lowercase speech input (declared only once here)
     const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
 
     if (isMatch) {
