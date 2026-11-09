@@ -958,7 +958,11 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         return res.send(twiml.toString());
     }
 
-    const isMatch = (passcode && digitsInput === passcode) || (passcode && speechInput.includes(passcode));
+    // Normalize the database passcode to lowercase for a reliable case-insensitive comparison
+    const normalizedPasscode = String(passcode || '1234').trim().toLowerCase();
+
+    // Check match against keypad digits or lowercase speech input (declared only once here)
+    const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
 
     if (isMatch) {
         twiml.say('Passcode accepted. Connecting your call.');
