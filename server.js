@@ -610,11 +610,15 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                 let rawPhone = "";
                 if (Array.isArray(contact.phone_numbers) && contact.phone_numbers.length > 0) {
                     rawPhone = contact.phone_numbers[0];
+                } else if (Array.isArray(contact.phoneNumbers) && contact.phoneNumbers.length > 0) {
+                    // Handles React Native / Expo contact picker structures
+                    const entry = contact.phoneNumbers[0];
+                    rawPhone = typeof entry === 'string' ? entry : (entry.number || entry.digits || '');
                 } else if (contact.phone_number) {
                     rawPhone = contact.phone_number;
                 }
 
-                // 🌟 Automatically format the phone number to E.164 (+1...)
+                // Automatically format the phone number to E.164 (+1...)
                 const phone = toE164(rawPhone);
                 if (!phone) continue; // Skip invalid numbers
 
