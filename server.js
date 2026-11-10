@@ -69,16 +69,20 @@ const authLimiter = rateLimit({
     }
 });
 
-// --- Twilio SMS Helper Function ---
-async function sendGuardianSMS(toPhoneNumber, messageBody) {
+// --- Unified Twilio SMS Helper Function (Supports User's Assigned Number) ---
+async function sendGuardianSMS(toPhoneNumber, messageBody, assignedTwilioNumber = null) {
     if (!toPhoneNumber) return;
     try {
+        // Uses the user's specific assigned regional number if available, 
+        // otherwise falls back to the main administrative environment variable.
+        const senderNumber = assignedTwilioNumber || process.env.TWILIO_PHONE_NUMBER || TWILIO_NUMBER;
+
         await twilioClient.messages.create({
             body: messageBody,
-            from: process.env.TWILIO_PHONE_NUMBER || TWILIO_NUMBER,
+            from: senderNumber,
             to: toPhoneNumber
         });
-        console.log(`[SMS Alert Sent] To: ${toPhoneNumber}`);
+        console.log(`[SMS Alert Sent] To: ${toPhoneNumber} from ${senderNumber}`);
     } catch (err) {
         console.error('[SMS Alert Error] Failed to send guardian SMS:', err);
     }
@@ -950,13 +954,6 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     const isTimeoutFallback = req.query.fallback === 'voicemail';
     const twiml = new VoiceResponse();
 
-    // Normalize the database passcode to lowercase for a reliable case-insensitive comparison
-    const normalizedPasscode = String(passcode || '1234').trim().toLowerCase();
-
-    // Check match against keypad digits or lowercase speech input
-    const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
-    
-
     let digitsInput = (Digits || '').trim();
     let speechInput = (SpeechResult || '').toLowerCase().trim();
 
@@ -1002,7 +999,13 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         }
     }
 
-   if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
+    // Normalize the database passcode AFTER it is successfully fetched from DB
+    const normalizedPasscode = String(passcode).trim().toLowerCase();
+
+    // Check match against keypad digits or lowercase speech input
+    const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
+
+    if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
         twiml.say('Connecting your urgent medical call.');
         if (ownerPhone) {
             twiml.dial(ownerPhone);
