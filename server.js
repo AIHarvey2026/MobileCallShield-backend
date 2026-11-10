@@ -607,12 +607,16 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
         try {
             await client.query('BEGIN');
             for (const contact of contacts) {
-                let phone = "";
+                let rawPhone = "";
                 if (Array.isArray(contact.phone_numbers) && contact.phone_numbers.length > 0) {
-                    phone = contact.phone_numbers[0];
+                    rawPhone = contact.phone_numbers[0];
                 } else if (contact.phone_number) {
-                    phone = contact.phone_number;
+                    rawPhone = contact.phone_number;
                 }
+
+                // 🌟 Automatically format the phone number to E.164 (+1...)
+                const phone = toE164(rawPhone);
+                if (!phone) continue; // Skip invalid numbers
 
                 const query = `
                     INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian, is_primary)
@@ -638,37 +642,6 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     } catch (err) {
         console.error("❌ Error bulk uploading contacts:", err);
         res.status(500).json({ error: "Server error syncing contacts." });
-    }
-});
-
-app.patch('/api/trusted-contacts/:contactId/guardian', async (req, res) => {
-    const { contactId } = req.params;
-    const { is_guardian } = req.body;
-
-    try {
-        const query = `
-            UPDATE trusted_contacts 
-            SET is_guardian = $1 
-            WHERE id = $2 
-            RETURNING id, name, phone_number, is_guardian, is_primary
-        `;
-        const result = await pool.query(query, [is_guardian, contactId]);
-        
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: "Contact not found." });
-        }
-        
-        const row = result.rows[0];
-        res.json({
-            id: row.id,
-            name: row.name,
-            phone_numbers: row.phone_number ? [row.phone_number] : [],
-            is_guardian: row.is_guardian,
-            is_primary: row.is_primary
-        });
-    } catch (err) {
-        console.error("❌ Error updating guardian status:", err);
-        res.status(500).json({ error: "Server error updating guardian status." });
     }
 });
 
