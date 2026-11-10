@@ -1087,6 +1087,33 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
     res.status(200).send('OK');
 });
 
+app.get('/api/voicemail/stream', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).send('Recording URL is required');
+
+    try {
+        const credentials = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+        
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Basic ${credentials}`
+            }
+        });
+
+        if (!response.ok) {
+            console.error(`[Proxy Error] Twilio responded with status: ${response.status}`);
+            return res.status(response.status).send('Failed to fetch media from Twilio');
+        }
+
+        res.setHeader('Content-Type', 'audio/mpeg');
+        // Pipe the audio stream directly to the client
+        response.body.pipe(res);
+    } catch (err) {
+        console.error('Error streaming voicemail:', err);
+        res.status(500).send('Error loading audio file');
+    }
+});
+
 // ----------------------------------------------------
 // Call Logs Endpoint for Mobile Clients with Date Filtering
 // ----------------------------------------------------
