@@ -1087,6 +1087,8 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
     res.status(200).send('OK');
 });
 
+const { Readable } = require('stream'); // Ensure this is imported or available
+
 app.get('/api/voicemail/stream', async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).send('Recording URL is required');
@@ -1106,8 +1108,10 @@ app.get('/api/voicemail/stream', async (req, res) => {
         }
 
         res.setHeader('Content-Type', 'audio/mpeg');
-        // Pipe the audio stream directly to the client
-        response.body.pipe(res);
+        
+        // Convert web stream to Node.js stream safely
+        const nodeStream = Readable.fromWeb(response.body);
+        nodeStream.pipe(res);
     } catch (err) {
         console.error('Error streaming voicemail:', err);
         res.status(500).send('Error loading audio file');
