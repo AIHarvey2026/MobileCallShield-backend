@@ -835,9 +835,25 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
 // Twilio Voice Webhook Handler & Passcode Verification
 // ----------------------------------------------------
 app.post('/api/twilio/voice', async (req, res) => {
-    const { CallSid, From, To, CallStatus, Direction } = req.body;
+    const { CallSid, From, To, CallStatus, Direction, ForwardedFrom } = req.body;
     
-    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}`);
+    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}, ForwardedFrom=${ForwardedFrom || 'none'}`);
+
+    // LOOP PREVENTION CHECK 1: Carrier ForwardedFrom header
+    if (ForwardedFrom) {
+        console.log(`[Twilio Webhook] Loop detected via ForwardedFrom header for caller ${From}. Directing to voicemail.`);
+        const twiml = new VoiceResponse();
+        twiml.say('The party is currently unavailable. Please leave a message after the tone.');
+        twiml.record({
+            action: '/api/twilio/handle-voicemail',
+            method: 'POST',
+            maxLength: 60,
+            transcribe: true,
+            transcribeCallback: '/api/twilio/voicemail-transcription'
+        });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+    }
 
     const dbClient = await pool.connect();
     try {
@@ -855,6 +871,30 @@ app.post('/api/twilio/voice', async (req, res) => {
 
         const user = userQuery.rows[0];
         const userId = user.user_id;
+
+        // LOOP PREVENTION CHECK 2: Strict 10-Second Window for Rapid Carrier Bounces ONLY
+        // If they called less than 10 seconds ago, it's a technical loop from *61*. 
+        // If they called 5 minutes ago, this check is bypassed and they get screened normally.
+        const rapidBounceCheck = await dbClient.query(
+            `SELECT id FROM call_logs 
+             WHERE user_id = $1 AND from_number = $2 AND created_at > NOW() - INTERVAL '10 seconds'`,
+            [userId, From]
+        );
+
+        if (rapidBounceCheck.rows.length > 0) {
+            console.log(`[Twilio Webhook] Rapid carrier bounce detected within 10 seconds for caller ${From}. Sending to voicemail to prevent loop.`);
+            const twiml = new VoiceResponse();
+            twiml.say('Please leave a message after the tone.');
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true,
+                transcribeCallback: '/api/twilio/voicemail-transcription'
+            });
+            res.type('text/xml');
+            return res.send(twiml.toString());
+        }
 
         await dbClient.query(
             `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
