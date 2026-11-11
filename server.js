@@ -832,28 +832,12 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
 }
 
 // ----------------------------------------------------
-// Twilio Voice Webhook Handler & Passcode Verification
+// Twilio Voice Webhook Handler & Loop Prevention
 // ----------------------------------------------------
 app.post('/api/twilio/voice', async (req, res) => {
-    const { CallSid, From, To, CallStatus, Direction, ForwardedFrom } = req.body;
+    const { CallSid, From, To, CallStatus, Direction } = req.body;
     
-    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}, ForwardedFrom=${ForwardedFrom || 'none'}`);
-
-    // LOOP PREVENTION CHECK 1: Carrier ForwardedFrom header
-    if (ForwardedFrom) {
-        console.log(`[Twilio Webhook] Loop detected via ForwardedFrom header for caller ${From}. Directing to voicemail.`);
-        const twiml = new VoiceResponse();
-        twiml.say('The party is currently unavailable. Please leave a message after the tone.');
-        twiml.record({
-            action: '/api/twilio/handle-voicemail',
-            method: 'POST',
-            maxLength: 60,
-            transcribe: true,
-            transcribeCallback: '/api/twilio/voicemail-transcription'
-        });
-        res.type('text/xml');
-        return res.send(twiml.toString());
-    }
+    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}`);
 
     const dbClient = await pool.connect();
     try {
@@ -872,9 +856,7 @@ app.post('/api/twilio/voice', async (req, res) => {
         const user = userQuery.rows[0];
         const userId = user.user_id;
 
-        // LOOP PREVENTION CHECK 2: Strict 10-Second Window for Rapid Carrier Bounces ONLY
-        // If they called less than 10 seconds ago, it's a technical loop from *61*. 
-        // If they called 5 minutes ago, this check is bypassed and they get screened normally.
+        // LOOP PREVENTION: Strict 10-Second Window for Rapid Carrier Bounces ONLY
         const rapidBounceCheck = await dbClient.query(
             `SELECT id FROM call_logs 
              WHERE user_id = $1 AND from_number = $2 AND created_at > NOW() - INTERVAL '10 seconds'`,
@@ -904,7 +886,6 @@ app.post('/api/twilio/voice', async (req, res) => {
             [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound']
         );
 
-        // Run Twilio Lookup asynchronously in the background so call never times out
         evaluateAndLogCallerAsync(CallSid, From, userId);
 
         const twiml = new VoiceResponse();
