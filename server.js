@@ -662,6 +662,11 @@ app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // Ensure is_primary column exists (safe no-op if already present)
+        await client.query(
+            'ALTER TABLE trusted_contacts ADD COLUMN IF NOT EXISTS is_primary BOOLEAN DEFAULT FALSE'
+        );
+
         // Step 1: Remove primary flag from all user's contacts
         await client.query(
             'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
@@ -679,19 +684,30 @@ app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
             return res.status(404).json({ success: false, error: 'Trusted contact not found.' });
         }
 
-        // Step 3: Fetch the contact's phone number and sync it to the users table / AuthManager preference if needed
         const updatedContact = result.rows[0];
-        await client.query(
-            'UPDATE users SET primary_guardian_phone = $1 WHERE id = $2',
-            [updatedContact.phone_number, userId]
-        );
-
         await client.query('COMMIT');
+
+        // Step 3: Optionally sync phone to users table without rolling back Step 1 & 2
+        try {
+            const guardianPhone =
+                updatedContact.phone_number ||
+                (Array.isArray(updatedContact.phone_numbers) ? updatedContact.phone_numbers[0] : null) ||
+                updatedContact.phone ||
+                '';
+
+            await pool.query(
+                'UPDATE users SET primary_guardian_phone = $1 WHERE id = $2',
+                [guardianPhone, userId]
+            );
+        } catch (userSyncErr) {
+            console.warn('Skipped users.primary_guardian_phone sync:', userSyncErr.message);
+        }
+
         res.json({ success: true, contact: updatedContact });
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error updating primary contact:', error);
-        res.status(500).json({ success: false, error: 'Database update failed' });
+        res.status(500).json({ success: false, error: error.message });
     } finally {
         client.release();
     }
