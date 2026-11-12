@@ -649,6 +649,54 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
+// PATCH /api/trusted-contacts/:contactId/primary
+app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
+    const { contactId } = req.params;
+    const userId = req.body.userId || req.body.user_id;
+
+    if (!userId) {
+        return res.status(400).json({ success: false, error: 'User ID is required.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Step 1: Remove primary flag from all user's contacts
+        await client.query(
+            'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
+            [userId]
+        );
+
+        // Step 2: Set target contact as Primary and ensure Guardian flag is active
+        const result = await client.query(
+            'UPDATE trusted_contacts SET is_primary = true, is_guardian = true WHERE id = $1 AND user_id = $2 RETURNING *',
+            [contactId, userId]
+        );
+
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, error: 'Trusted contact not found.' });
+        }
+
+        // Step 3: Fetch the contact's phone number and sync it to the users table / AuthManager preference if needed
+        const updatedContact = result.rows[0];
+        await client.query(
+            'UPDATE users SET primary_guardian_phone = $1 WHERE id = $2',
+            [updatedContact.phone_number, userId]
+        );
+
+        await client.query('COMMIT');
+        res.json({ success: true, contact: updatedContact });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating primary contact:', error);
+        res.status(500).json({ success: false, error: 'Database update failed' });
+    } finally {
+        client.release();
+    }
+});
+
 // Update for trusted_contacts primary management
 app.put('/api/trusted_contacts/:id', async (req, res) => {
     const contactId = req.params.id;
