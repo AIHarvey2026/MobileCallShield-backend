@@ -1560,6 +1560,37 @@ app.get('/api/twilio/stats', async (req, res) => {
 });
 
 // ==========================================
+// Stride Call Stats Services & Routes
+// ==========================================
+
+const { 
+  fetchAndStoreStrideStats, 
+  getStrideStatsSummary 
+} = require('./services/strideService');
+
+// Hourly or daily sync for Stride stats data (matches your automation pattern)
+cron.schedule('0 * * * *', async () => {
+  console.log('🔄 [Cron Job] Running sync for stride_stat_data...');
+  try {
+    await fetchAndStoreStrideStats();
+    console.log('✅ [Cron Job] Stride stats sync complete.');
+  } catch (err) {
+    console.error('❌ [Cron Job Error] Failed to sync Stride stats:', err);
+  }
+});
+
+// Endpoint to view aggregated Stride stats alongside your receivables/costs workflow
+app.get('/api/stride/stats', async (req, res) => {
+  try {
+    await fetchAndStoreStrideStats();
+    const stats = await getStrideStatsSummary();
+    res.json({ success: true, strideStats: stats });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Failed to retrieve stride stats' });
+  }
+});
+
+// ==========================================
 // Server Start
 // ==========================================
 app.listen(PORT, '0.0.0.0', () => {
