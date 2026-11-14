@@ -1523,40 +1523,26 @@ app.post('/api/webhook/sms', async (req, res) => {
     }
 });
 
-// Import your custom services
-const { sendGuardianReport } = require('./services/reportService');
+// ==========================================
+// Twilio Call Stats Services & Routes
+// ==========================================
 const { 
   fetchAndStoreTwilioCalls, 
   getWeeklyStatsPerNumber 
 } = require('./services/twilioStatsService');
 
-// App & Database Initialization
-const app = express();
-const port = process.env.PORT || 3000;
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+// Midnight Twilio Stats Sync (Runs at 12:00 AM every day)
+cron.schedule('0 0 * * *', async () => {
+  console.log('🔄 [Cron Job] Running midnight sync for Twilio call stats...');
+  try {
+    await fetchAndStoreTwilioCalls(100);
+    console.log('✅ [Cron Job] Midnight Twilio stats sync complete.');
+  } catch (err) {
+    console.error('❌ [Cron Job Error] Failed to sync Twilio call stats:', err);
+  }
 });
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID, 
-  process.env.TWILIO_AUTH_TOKEN
-);
-
-app.use(express.json());
-
-// ==========================================
-// 2. BACKGROUND CRON JOBS
-// ==========================================
-// Daily Guardian Report Cron Job
-cron.schedule('0 * * * *', async () => {
-  // Cron logic here...
-});
-
-// ==========================================
-// 3. API ENDPOINTS / ROUTES
-// ==========================================
+// Endpoint to view or trigger weekly Twilio stats
 app.get('/api/twilio/stats', async (req, res) => {
   const { phone } = req.query;
   if (!phone) {
@@ -1570,33 +1556,11 @@ app.get('/api/twilio/stats', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to retrieve stats' });
   }
-}); 
-
-// ==========================================
-// Daily Twilio Stats Sync (Runs at 12:00 AM every day)
-// ==========================================
-cron.schedule('0 0 * * *', async () => {
-  console.log('🔄 [Cron Job] Running midnight sync for Twilio call stats...');
-  try {
-    // Sync the last 100 call records from Twilio to PostgreSQL
-    await fetchAndStoreTwilioCalls(100);
-    console.log('✅ [Cron Job] Midnight Twilio stats sync complete.');
-  } catch (err) {
-    console.error('❌ [Cron Job Error] Failed to sync Twilio call stats:', err);
-  }
 });
 
 // ==========================================
-// 4. SERVER START
+// Server Start
 // ==========================================
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-});
-
-
-// ----------------------------------------------------
-// Server Listen
-// ----------------------------------------------------
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Mobile Call Shield server running on port ${PORT}`);
+    console.log(`🚀 Mobile Call Shield server running on port ${PORT}`);
 });
