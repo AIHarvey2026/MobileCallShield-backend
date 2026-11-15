@@ -1594,9 +1594,15 @@ app.get('/api/stride/stats', async (req, res) => {
 // Guardian - Protected Dashboard
 // ==========================================
 
-// GET protected dependents (seniors) for a logged-in guardian
+/// GET protected dependents (seniors) for a logged-in guardian
 app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
     const { guardianUserId } = req.params;
+    const parsedUserId = parseInt(guardianUserId, 10);
+    
+    if (isNaN(parsedUserId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
+    }
+
     try {
         const query = `
             SELECT 
@@ -1610,18 +1616,18 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
             WHERE ag.guardian_user_id = $1
         `;
         
-        const result = await pool.query(query, [guardianUserId]);
+        const result = await pool.query(query, [parsedUserId]);
         
-        res.json({
+        // Always send valid JSON with an array fallback
+        return res.json({
             success: true,
-            dependents: result.rows
+            dependents: result.rows || []
         });
     } catch (error) {
         console.error('Error fetching protected dependents:', error);
-        res.status(500).json({ success: false, error: error.message });
+        return res.status(500).json({ success: false, error: error.message });
     }
 });
-
 
 // ==========================================
 // Server Start
