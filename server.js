@@ -1591,6 +1591,39 @@ app.get('/api/stride/stats', async (req, res) => {
 });
 
 // ==========================================
+// Guardian - Protected Dashboard
+// ==========================================
+
+// GET protected dependents (seniors) for a logged-in guardian
+app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
+    const { guardianUserId } = req.params;
+    try {
+        const query = `
+            SELECT 
+                u.id, 
+                u.user_name AS senior_name, 
+                u.owner_phone AS senior_phone, 
+                COALESCE(u.is_call_shield_enabled, true) AS is_shield_active,
+                false AS is_primary
+            FROM account_guardians ag
+            JOIN users u ON ag.dependent_user_id = u.id
+            WHERE ag.guardian_user_id = $1
+        `;
+        
+        const result = await pool.query(query, [guardianUserId]);
+        
+        res.json({
+            success: true,
+            dependents: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching protected dependents:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
+// ==========================================
 // Server Start
 // ==========================================
 app.listen(PORT, '0.0.0.0', () => {
