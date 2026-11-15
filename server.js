@@ -1598,7 +1598,7 @@ app.get('/api/stride/stats', async (req, res) => {
 app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
     const { guardianUserId } = req.params;
     const parsedUserId = parseInt(guardianUserId, 10);
-    
+
     if (isNaN(parsedUserId)) {
         return res.status(400).json({ success: false, error: 'Invalid user ID format' });
     }
@@ -1615,10 +1615,9 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
             JOIN users u ON ag.dependent_user_id = u.id
             WHERE ag.guardian_user_id = $1
         `;
-        
+
         const result = await pool.query(query, [parsedUserId]);
-        
-        // Always send valid JSON with an array fallback
+
         return res.json({
             success: true,
             dependents: result.rows || []
