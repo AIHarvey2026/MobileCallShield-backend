@@ -1749,8 +1749,11 @@ app.get('/api/system/menu-tree', async (req, res) => {
     }
 });
 
-app.get('/api/guardians/features', async (req, res) => {
+// Get Features
+
+app.get('/api/guardians/features/:id', async (req, res) => {
     try {
+        const dependentId = req.params.id;
         const query = `
             SELECT
                 pf.id,
