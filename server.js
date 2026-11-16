@@ -1749,6 +1749,26 @@ app.get('/api/system/menu-tree', async (req, res) => {
     }
 });
 
+// Fetch guardian portal features independently without touching MainDashboard
+app.get('/api/guardian/features', async (req, res) => {
+    try {
+        const query = `
+            SELECT id, feature_name, description, is_enabled, sort_order
+            FROM guardian_portal_features
+            WHERE is_enabled = true
+            ORDER BY sort_order ASC;
+        `;
+        const result = await pool.query(query);
+        res.json({ success: true, guardianFeatures: result.rows });
+    } catch (err) {
+        console.error('Error fetching guardian portal features:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+
+
+
 // ==========================================
 // Server Start
 // ==========================================
