@@ -1591,10 +1591,10 @@ app.get('/api/stride/stats', async (req, res) => {
 });
 
 // ==========================================
-// Guardian - Protected Dashboard
+// Guardian - Protected Dashboard & Settings
 // ==========================================
 
-/// GET protected dependents (seniors) for a logged-in guardian
+// GET protected dependents (seniors) for a logged-in guardian
 app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
     const { guardianUserId } = req.params;
     const parsedUserId = parseInt(guardianUserId, 10);
@@ -1625,6 +1625,127 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
     } catch (error) {
         console.error('Error fetching protected dependents:', error);
         return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Helper function to fetch or seed default global guardian settings
+async function getGuardianSettings(userId) {
+    let res = await pool.query(
+        'SELECT * FROM guardian_settings WHERE user_id = $1',
+        [userId]
+    );
+
+    if (res.rows.length === 0) {
+        res = await pool.query(
+            `INSERT INTO guardian_settings 
+                (user_id, threat_feed_enabled, remote_shield_enabled, emergency_actions_enabled, check_ins_enabled)
+             VALUES ($1, true, true, true, false)
+             RETURNING *`,
+            [userId]
+        );
+    }
+    return res.rows[0];
+}
+
+// GET /api/guardians/settings/:userId
+app.get('/api/guardians/settings/:userId', async (req, res) => {
+    try {
+        const userId = parseInt(req.params.userId, 10);
+        const settings = await getGuardianSettings(userId);
+
+        res.json({
+            success: true,
+            settings: {
+                userId: settings.user_id,
+                threatFeedEnabled: settings.threat_feed_enabled,
+                remoteShieldEnabled: settings.remote_shield_enabled,
+                emergencyActionsEnabled: settings.emergency_actions_enabled,
+                checkInsEnabled: settings.check_ins_enabled
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching guardian settings:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+});
+
+// PUT /api/guardians/settings/:userId
+app.put('/api/guardians/settings/:userId', async (req, res) => {
+    try {
+        const userId = parseInt(req.params.userId, 10);
+        const { threatFeedEnabled, remoteShieldEnabled, emergencyActionsEnabled, checkInsEnabled } = req.body;
+
+        const query = `
+            INSERT INTO guardian_settings 
+                (user_id, threat_feed_enabled, remote_shield_enabled, emergency_actions_enabled, check_ins_enabled, updated_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            ON CONFLICT (user_id) DO UPDATE SET
+                threat_feed_enabled = EXCLUDED.threat_feed_enabled,
+                remote_shield_enabled = EXCLUDED.remote_shield_enabled,
+                emergency_actions_enabled = EXCLUDED.emergency_actions_enabled,
+                check_ins_enabled = EXCLUDED.check_ins_enabled,
+                updated_at = NOW()
+            RETURNING *;
+        `;
+
+        const values = [
+            userId,
+            threatFeedEnabled ?? true,
+            remoteShieldEnabled ?? true,
+            emergencyActionsEnabled ?? true,
+            checkInsEnabled ?? false
+        ];
+
+        const result = await pool.query(query, values);
+        const updated = result.rows[0];
+
+        res.json({
+            success: true,
+            message: 'Guardian settings updated successfully',
+            settings: {
+                userId: updated.user_id,
+                threatFeedEnabled: updated.threat_feed_enabled,
+                remoteShieldEnabled: updated.remote_shield_enabled,
+                emergencyActionsEnabled: updated.emergency_actions_enabled,
+                checkInsEnabled: updated.check_ins_enabled
+            }
+        });
+    } catch (error) {
+        console.error('Error updating guardian settings:', error);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+});
+
+// ==========================================
+// Dynamic Tables for app sections (Display and reporting)
+// ==========================================
+
+app.get('/api/system/menu-tree', async (req, res) => {
+    try {
+        const query = `
+            SELECT
+                sf.feature_id as system_id,
+                sf.function_type,
+                pf.id as portal_id,
+                pf.child_id,
+                pf.feature_name,
+                pf.description,
+                pf.xcode_table,
+                pf.android_studio_table,
+                pf.is_enabled,
+                pf.sort_order,
+                pf.sub_sort_order
+            FROM system_features sf
+            LEFT JOIN portal_features pf ON sf.feature_id = pf.feature_id
+            WHERE sf.is_active = true AND pf.is_enabled = true
+            ORDER BY sf.feature_id, pf.sort_order, pf.sub_sort_order;
+        `;
+       
+        const result = await pool.query(query);
+        res.json({ success: true, menuTree: result.rows });
+    } catch (err) {
+        console.error('Error fetching menu tree:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
