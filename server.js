@@ -1749,14 +1749,22 @@ app.get('/api/system/menu-tree', async (req, res) => {
     }
 });
 
-// Fetch guardian portal features independently without touching MainDashboard
 app.get('/api/guardian/features', async (req, res) => {
     try {
         const query = `
-            SELECT id, feature_name, description, is_enabled, sort_order
-            FROM guardian_portal_features
-            WHERE is_enabled = true
-            ORDER BY sort_order ASC;
+            SELECT
+                pf.id,
+                pf.feature_name,
+                pf.description,
+                pf.is_enabled,
+                pf.sort_order,
+                pf.sub_sort_order
+            FROM portal_features pf
+            JOIN system_features sf ON pf.feature_id = sf.feature_id
+            WHERE sf.is_active = true
+              AND pf.is_enabled = true
+              AND sf.function_type = 'Guardian Portal'
+            ORDER BY pf.sort_order ASC, pf.sub_sort_order ASC;
         `;
         const result = await pool.query(query);
         res.json({ success: true, guardianFeatures: result.rows });
@@ -1765,8 +1773,6 @@ app.get('/api/guardian/features', async (req, res) => {
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
-
-
 
 
 // ==========================================
