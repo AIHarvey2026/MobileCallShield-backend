@@ -1760,7 +1760,7 @@ app.get('/api/guardian/features', async (req, res) => {
                 pf.sort_order,
                 pf.sub_sort_order
             FROM portal_features pf
-            JOIN system_features sf ON pf.feature_id = sf.feature_id
+            JOIN system_features sf ON pf.child_id = sf.feature_id
             WHERE sf.is_active = true
               AND pf.is_enabled = true
               AND sf.function_type = 'Guardian Portal'
