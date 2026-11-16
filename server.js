@@ -1749,7 +1749,7 @@ app.get('/api/system/menu-tree', async (req, res) => {
     }
 });
 
-app.get('/api/guardian/features', async (req, res) => {
+app.get('/api/guardians/features', async (req, res) => {
     try {
         const query = `
             SELECT
