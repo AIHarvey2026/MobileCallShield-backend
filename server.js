@@ -1811,24 +1811,24 @@ app.put('/api/guardians/report-settings', async (req, res) => {
     let { ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms, sendViaEmail, reportTime } = req.body;
 
     try {
-        // Safety fallback: Check if guardianId exists in the users table.
-        // If not, try to find the user by phone number.
+        // 1. Verify if guardianId exists in users table
         const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [guardianId]);
         if (userCheck.rows.length === 0) {
-            const phoneMatch = await pool.query('SELECT id FROM users WHERE phone_number = $1 OR phone = $1', [guardianPhone]);
+            // 2. Fallback check using owner_phone since that matches your schema
+            const phoneMatch = await pool.query('SELECT id FROM users WHERE owner_phone = $1', [guardianPhone]);
             if (phoneMatch.rows.length > 0) {
-                guardianId = phoneMatch.rows[0].id; // Remap to actual valid user ID
+                guardianId = phoneMatch.rows[0].id; // Remap to the actual valid user ID
             } else {
                 return res.status(400).json({ success: false, error: "Guardian ID does not exist in users table." });
             }
         }
 
         const query = `
-            INSERT INTO guardian_report_settings
+            INSERT INTO guardian_report_settings 
                 (owner_id, guardian_id, guardian_phone, guardian_email, send_via_sms, send_via_email, report_time)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (guardian_id)
-            DO UPDATE SET
+            ON CONFLICT (guardian_id) 
+            DO UPDATE SET 
                 guardian_phone = EXCLUDED.guardian_phone,
                 guardian_email = EXCLUDED.guardian_email,
                 send_via_sms = EXCLUDED.send_via_sms,
@@ -1836,7 +1836,7 @@ app.put('/api/guardians/report-settings', async (req, res) => {
                 report_time = EXCLUDED.report_time
             RETURNING *;
         `;
-       
+        
         const values = [ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms ?? true, sendViaEmail ?? false, reportTime];
         const result = await pool.query(query, values);
 
