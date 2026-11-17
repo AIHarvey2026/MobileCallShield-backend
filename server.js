@@ -1654,7 +1654,7 @@ app.get('/api/guardians/contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const query = `
-            SELECT id, name, phone_number AS phone, relationship, is_primary 
+            SELECT id, name, phone_number, is_guardian, is_primary 
             FROM trusted_contacts 
             WHERE guardian_user_id = $1 AND is_guardian = TRUE
         `;
