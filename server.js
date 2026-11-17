@@ -1749,7 +1749,7 @@ app.get('/api/system/menu-tree', async (req, res) => {
     }
 });
 
-// Get Features
+// Get the features for Guardian Portal
 
 app.get('/api/guardians/features/:id', async (req, res) => {
     try {
@@ -1776,6 +1776,70 @@ app.get('/api/guardians/features/:id', async (req, res) => {
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
+
+// Put the features for Guardian Portal
+app.put('/api/guardians/features/:id', async (req, res) => {
+    try {
+        const dependentId = req.params.id;
+        const { featureId, isEnabled } = req.body;
+
+        if (!featureId || isEnabled === undefined) {
+            return res.status(400).json({ success: false, error: 'featureId and isEnabled are required' });
+        }
+
+        const query = `
+            UPDATE portal_features
+            SET is_enabled = $1, updated_at = NOW()
+            WHERE id = $2
+            RETURNING id, feature_name, is_enabled;
+        `;
+       
+        const result = await pool.query(query, [isEnabled, featureId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Feature not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Protectee feature state updated successfully',
+            feature: result.rows[0]
+        });
+    } catch (err) {
+        console.error('Error updating protectee feature state:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// Get the features for Main Dashboard
+
+app.get('/api/dashboard/features/:id', async (req, res) => {
+    try {
+        const dependentId = req.params.id;
+        const query = `
+            SELECT
+    pf.id,
+    pf.feature_name,
+    pf.description,
+    pf.is_enabled,
+    pf.sort_order,
+    pf.sub_sort_order
+FROM portal_features pf
+JOIN system_features sf ON pf.feature_id = sf.feature_id
+WHERE sf.is_active = true
+  AND pf.is_enabled = true
+  AND sf.function_type = 'MainDashboard'
+  AND pf.child_id IS NULL
+ORDER BY pf.sort_order ASC, pf.sub_sort_order ASC;
+        `;
+        const result = await pool.query(query);
+        res.json({ success: true, guardianFeatures: result.rows });
+    } catch (err) {
+        console.error('Error fetching guardian portal features:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
 
 
 // ==========================================
