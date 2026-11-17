@@ -1789,7 +1789,7 @@ app.put('/api/guardians/features/:id', async (req, res) => {
 
         const query = `
             UPDATE portal_features
-            SET is_enabled = $1, updated_at = NOW()
+            SET is_enabled = $1
             WHERE id = $2
             RETURNING id, feature_name, is_enabled;
         `;
@@ -1810,7 +1810,6 @@ app.put('/api/guardians/features/:id', async (req, res) => {
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
-
 // Get the features for Main Dashboard
 
 app.get('/api/dashboard/features/:id', async (req, res) => {
