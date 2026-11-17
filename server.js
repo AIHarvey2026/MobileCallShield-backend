@@ -1647,6 +1647,38 @@ async function getGuardianSettings(userId) {
     return res.rows[0];
 }
 
+
+// Get trusted contacts for a user/protectee
+app.get('/api/guardians/contacts/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const query = `SELECT id, name, phone, relationship, is_primary FROM trusted_contacts WHERE user_id = $1`;
+        const result = await pool.query(query, [userId]);
+        res.json({ success: true, contacts: result.rows });
+    } catch (err) {
+        console.error('Error fetching trusted contacts:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// Add a new trusted contact
+app.post('/api/guardians/contacts', async (req, res) => {
+    try {
+        const { userId, name, phone, relationship, isPrimary } = req.body;
+        const query = `
+            INSERT INTO trusted_contacts (user_id, name, phone, relationship, is_primary)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, phone, relationship, is_primary;
+        `;
+        const result = await pool.query(query, [userId, name, phone, relationship, isPrimary || false]);
+        res.json({ success: true, contact: result.rows[0] });
+    } catch (err) {
+        console.error('Error adding trusted contact:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+
 // GET /api/guardians/settings/:userId
 app.get('/api/guardians/settings/:userId', async (req, res) => {
     try {
