@@ -584,9 +584,10 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
         const formattedRows = result.rows.map(row => ({
             id: row.id,
             name: row.name,
-            phone_numbers: row.phone_number ? [row.phone_number] : [],
-            is_guardian: row.is_guardian,
-            is_primary: row.is_primary
+            phone: row.phone_number, // Keep as single string to match Android's optString("phone")
+            phone_number: row.phone_number,
+            is_guardian: true, // Force true so they populate as guardians in the settings screen
+            is_primary: row.is_primary || false
         }));
         
         res.json(formattedRows);
