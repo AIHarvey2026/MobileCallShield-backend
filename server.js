@@ -1808,9 +1808,21 @@ app.post('/api/guardians/call-logs', async (req, res) => {
 
 // Insert reporting from Guardian Settings to guardian_report_settings table
 app.put('/api/guardians/report-settings', async (req, res) => {
-    const { ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms, sendViaEmail, reportTime } = req.body;
+    let { ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms, sendViaEmail, reportTime } = req.body;
 
     try {
+        // Safety fallback: Check if guardianId exists in the users table.
+        // If not, try to find the user by phone number.
+        const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [guardianId]);
+        if (userCheck.rows.length === 0) {
+            const phoneMatch = await pool.query('SELECT id FROM users WHERE phone_number = $1 OR phone = $1', [guardianPhone]);
+            if (phoneMatch.rows.length > 0) {
+                guardianId = phoneMatch.rows[0].id; // Remap to actual valid user ID
+            } else {
+                return res.status(400).json({ success: false, error: "Guardian ID does not exist in users table." });
+            }
+        }
+
         const query = `
             INSERT INTO guardian_report_settings
                 (owner_id, guardian_id, guardian_phone, guardian_email, send_via_sms, send_via_email, report_time)
@@ -1825,17 +1837,9 @@ app.put('/api/guardians/report-settings', async (req, res) => {
             RETURNING *;
         `;
        
-        const values = [
-            ownerId,
-            guardianId,
-            guardianPhone,
-            guardianEmail,
-            sendViaSms ?? true,
-            sendViaEmail ?? false,
-            reportTime
-        ];
-       
+        const values = [ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms ?? true, sendViaEmail ?? false, reportTime];
         const result = await pool.query(query, values);
+
         res.json({ success: true, settings: result.rows[0] });
     } catch (err) {
         console.error("❌ Error updating guardian report settings:", err);
