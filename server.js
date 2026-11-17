@@ -1789,7 +1789,7 @@ app.get('/api/guardians/call-logs/:userId', async (req, res) => {
     }
 });
 
-// Post a new call log entry (uploaded from protectee device)
+// Post a new call log entry (uploaded from protected device)
 app.post('/api/guardians/call-logs', async (req, res) => {
     try {
         const { userId, callerNumber, callerName, callType, riskLevel, audioUrl, isBlocked } = req.body;
@@ -1806,6 +1806,35 @@ app.post('/api/guardians/call-logs', async (req, res) => {
     }
 });
 
+// Insert reporting from Guardian Settings to guardian_report_settings table
+app.put('/api/guardians/report-settings', async (req, res) => {
+    const { ownerId, guardianId, guardianPhone, guardianEmail, dailyReportEnabled, reportTime, sendViaSms, sendViaEmail } = req.body;
+
+    try {
+        const query = `
+            INSERT INTO guardian_report_settings 
+                (owner_id, guardian_id, guardian_phone, guardian_email, daily_report_enabled, report_time, send_via_sms, send_via_email)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (guardian_id) 
+            DO UPDATE SET 
+                guardian_phone = EXCLUDED.guardian_phone,
+                guardian_email = EXCLUDED.guardian_email,
+                daily_report_enabled = EXCLUDED.daily_report_enabled,
+                report_time = EXCLUDED.report_time,
+                send_via_sms = EXCLUDED.send_via_sms,
+                send_via_email = EXCLUDED.send_via_email
+            RETURNING *;
+        `;
+        
+        const values = [ownerId, guardianId, guardianPhone, guardianEmail, dailyReportEnabled, reportTime, sendViaSms ?? true, sendViaEmail ?? false];
+        const result = await pool.query(query, values);
+
+        res.json({ success: true, settings: result.rows[0] });
+    } catch (err) {
+        console.error("❌ Error updating guardian report settings:", err);
+        res.status(500).json({ success: false, error: "Failed to update report settings." });
+    }
+});
 
 // ==========================================
 // Dynamic Tables for app sections (Display and reporting)
