@@ -1808,27 +1808,34 @@ app.post('/api/guardians/call-logs', async (req, res) => {
 
 // Insert reporting from Guardian Settings to guardian_report_settings table
 app.put('/api/guardians/report-settings', async (req, res) => {
-    const { ownerId, guardianId, guardianPhone, guardianEmail, dailyReportEnabled, reportTime, sendViaSms, sendViaEmail } = req.body;
+    const { ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms, sendViaEmail, reportTime } = req.body;
 
     try {
         const query = `
-            INSERT INTO guardian_report_settings 
-                (owner_id, guardian_id, guardian_phone, guardian_email, daily_report_enabled, report_time, send_via_sms, send_via_email)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (guardian_id) 
-            DO UPDATE SET 
+            INSERT INTO guardian_report_settings
+                (owner_id, guardian_id, guardian_phone, guardian_email, send_via_sms, send_via_email, report_time)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (guardian_id)
+            DO UPDATE SET
                 guardian_phone = EXCLUDED.guardian_phone,
                 guardian_email = EXCLUDED.guardian_email,
-                daily_report_enabled = EXCLUDED.daily_report_enabled,
-                report_time = EXCLUDED.report_time,
                 send_via_sms = EXCLUDED.send_via_sms,
-                send_via_email = EXCLUDED.send_via_email
+                send_via_email = EXCLUDED.send_via_email,
+                report_time = EXCLUDED.report_time
             RETURNING *;
         `;
-        
-        const values = [ownerId, guardianId, guardianPhone, guardianEmail, dailyReportEnabled, reportTime, sendViaSms ?? true, sendViaEmail ?? false];
+       
+        const values = [
+            ownerId,
+            guardianId,
+            guardianPhone,
+            guardianEmail,
+            sendViaSms ?? true,
+            sendViaEmail ?? false,
+            reportTime
+        ];
+       
         const result = await pool.query(query, values);
-
         res.json({ success: true, settings: result.rows[0] });
     } catch (err) {
         console.error("❌ Error updating guardian report settings:", err);
