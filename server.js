@@ -1649,11 +1649,15 @@ async function getGuardianSettings(userId) {
 }
 
 
-// Get trusted contacts for a user/protectee
+// Get guardians from the trusted_contacts
 app.get('/api/guardians/contacts/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        const query = `SELECT id, name, phone, relationship, is_primary FROM trusted_contacts WHERE user_id = $1`;
+        const query = `
+            SELECT id, name, phone_number AS phone, relationship, is_primary 
+            FROM trusted_contacts 
+            WHERE guardian_user_id = $1 AND is_guardian = TRUE
+        `;
         const result = await pool.query(query, [userId]);
         res.json({ success: true, contacts: result.rows });
     } catch (err) {
@@ -1663,19 +1667,36 @@ app.get('/api/guardians/contacts/:userId', async (req, res) => {
 });
 
 // Add a new trusted contact
+// Add a new guardian or trusted contact
 app.post('/api/guardians/contacts', async (req, res) => {
+    const { userId, name, phoneNumber, relationship, isPrimary, isGuardian, guardianUserId } = req.body;
+    
     try {
-        const { userId, name, phone, relationship, isPrimary } = req.body;
         const query = `
-            INSERT INTO trusted_contacts (user_id, name, phone, relationship, is_primary)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, name, phone, relationship, is_primary;
+            INSERT INTO trusted_contacts (user_id, name, phone_number, relationship, is_primary, is_guardian, guardian_user_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id, name, phone_number, relationship, is_primary, is_guardian, guardian_user_id;
         `;
-        const result = await pool.query(query, [userId, name, phone, relationship, isPrimary || false]);
-        res.json({ success: true, contact: result.rows[0] });
+        
+        const values = [
+            userId, 
+            name, 
+            phoneNumber, 
+            relationship || 'Guardian', 
+            isPrimary || false, 
+            isGuardian !== undefined ? isGuardian : true,
+            guardianUserId || null // Links to the users table if they have an active app account
+        ];
+        
+        const result = await pool.query(query, values);
+
+        res.status(201).json({ 
+            success: true, 
+            contact: result.rows[0] 
+        });
     } catch (err) {
-        console.error('Error adding trusted contact:', err);
-        res.status(500).json({ success: false, error: 'Internal server error' });
+        console.error("❌ Error adding guardian contact:", err);
+        res.status(500).json({ success: false, error: "Failed to add guardian contact." });
     }
 });
 
