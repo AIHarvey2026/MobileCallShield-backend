@@ -1748,6 +1748,43 @@ app.put('/api/guardians/settings/:userId', async (req, res) => {
     }
 });
 
+// Get call logs and threat history for a protectee
+app.get('/api/guardians/call-logs/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const query = `
+            SELECT id, caller_number, caller_name, call_type, risk_level, timestamp, audio_url, is_blocked
+            FROM call_logs
+            WHERE user_id = $1
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        `;
+        const result = await pool.query(query, [userId]);
+        res.json({ success: true, logs: result.rows });
+    } catch (err) {
+        console.error('Error fetching call logs:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// Post a new call log entry (uploaded from protectee device)
+app.post('/api/guardians/call-logs', async (req, res) => {
+    try {
+        const { userId, callerNumber, callerName, callType, riskLevel, audioUrl, isBlocked } = req.body;
+        const query = `
+            INSERT INTO call_logs (user_id, caller_number, caller_name, call_type, risk_level, timestamp, audio_url, is_blocked)
+            VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)
+            RETURNING id, caller_number, risk_level, timestamp;
+        `;
+        const result = await pool.query(query, [userId, callerNumber, callerName, callType, riskLevel, audioUrl, isBlocked]);
+        res.json({ success: true, log: result.rows[0] });
+    } catch (err) {
+        console.error('Error saving call log:', err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+
 // ==========================================
 // Dynamic Tables for app sections (Display and reporting)
 // ==========================================
