@@ -1608,10 +1608,9 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
         const query = `
             SELECT 
                 u.id, 
-                u.user_name AS senior_name, 
-                u.owner_phone AS senior_phone, 
-                COALESCE(u.is_call_shield_enabled, true) AS is_shield_active,
-                false AS is_primary
+                u.user_name AS name, 
+                u.owner_phone AS phone_number, 
+                COALESCE(u.is_call_shield_enabled, true) AS is_protected
             FROM account_guardians ag
             JOIN users u ON ag.dependent_user_id = u.id
             WHERE ag.guardian_user_id = $1
