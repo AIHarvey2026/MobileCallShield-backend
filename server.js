@@ -557,7 +557,7 @@ app.get('/api/user/profile', async (req, res) => {
 app.get('/api/guardians/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
-        const query = `
+        const query = 
     SELECT ag.id, us.user_name as dependent_name, ag.dependent_user_id as dependentUserId, ag.permission_level as relationship, ag.created_at as createdAt
     FROM account_guardians ag
     JOIN users us ON us.id = ag.dependent_user_id
