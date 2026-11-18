@@ -557,13 +557,17 @@ app.get('/api/user/profile', async (req, res) => {
 app.get('/api/guardians/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
-        const result = await pool.query(
-            SELECT ag.id, us.user_name as dependent_name, ag.dependent_user_id as dependentUserId, ag.permission_level as relationship, ag.created_at as createdAt
-	    FROM account_guardians ag
-	    JOIN users us ON us.id = ag.dependent_user_id
-	    WHERE ag.guardian_user_id = $1 
-  	    AND ag.is_active = true
-        );
+        const query = `
+    SELECT ag.id, us.user_name as dependent_name, ag.dependent_user_id as dependentUserId, ag.permission_level as relationship, ag.created_at as createdAt
+    FROM account_guardians ag
+    JOIN users us ON us.id = ag.dependent_user_id
+    WHERE ag.guardian_user_id = $1 
+      AND ag.is_active = true
+`;
+const values = [userId];
+const result = await pool.query(query, values);
+
+
         res.status(200).json(result.rows);
     } catch (err) {
         console.error('Error fetching guardians:', err);
