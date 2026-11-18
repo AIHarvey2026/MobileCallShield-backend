@@ -1618,7 +1618,7 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
                 COALESCE(u.is_call_shield_enabled, true) AS is_protected
             FROM account_guardians ag
             JOIN users u ON ag.dependent_user_id = u.id
-            WHERE ag.guardian_user_id = $1 AND ag.is_active = "True"
+            WHERE ag.guardian_user_id = $1 AND ag.is_active = true
         `;
 
         const result = await pool.query(query, [parsedUserId]);
