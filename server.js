@@ -558,10 +558,11 @@ app.get('/api/guardians/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
         const result = await pool.query(
-            `SELECT ag.id, ag.guardian_user_id as guardianUserId, ag.permission_level as relationship, ag.created_at as createdAt
-             FROM account_guardians ag
-             WHERE ag.dependent_user_id = $1`,
-            [userId]
+            SELECT ag.id, us.user_name as dependent_name, ag.dependent_user_id as dependentUserId, ag.permission_level as relationship, ag.created_at as createdAt
+	    FROM account_guardians ag
+	    JOIN users us ON us.id = ag.dependent_user_id
+	    WHERE ag.guardian_user_id = $1 
+  	    AND ag.is_active = true
         );
         res.status(200).json(result.rows);
     } catch (err) {
@@ -1613,7 +1614,7 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
                 COALESCE(u.is_call_shield_enabled, true) AS is_protected
             FROM account_guardians ag
             JOIN users u ON ag.dependent_user_id = u.id
-            WHERE ag.guardian_user_id = $1
+            WHERE ag.guardian_user_id = $1 AND ag.is_active = "True"
         `;
 
         const result = await pool.query(query, [parsedUserId]);
