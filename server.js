@@ -1649,57 +1649,53 @@ async function getGuardianSettings(userId) {
 }
 
 
-// Get guardians from the trusted_contacts
-app.get('/api/guardians/contacts/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const query = `
-            SELECT id, name, phone_number, is_guardian, is_primary 
-            FROM trusted_contacts 
-            WHERE guardian_user_id = $1 AND is_guardian = TRUE
-        `;
-        const result = await pool.query(query, [userId]);
-        res.json({ success: true, contacts: result.rows });
-    } catch (err) {
-        console.error('Error fetching trusted contacts:', err);
-        res.status(500).json({ success: false, error: 'Internal server error' });
-    }
-});
-
-// Add a new trusted contact
-// Add a new guardian or trusted contact
+// Add or update a trusted contact and sync guardian portal access
 app.post('/api/guardians/contacts', async (req, res) => {
     const { userId, name, phoneNumber, relationship, isPrimary, isGuardian, guardianUserId } = req.body;
     
     try {
-        const query = `
+        // 1. Insert or update the entry in trusted_contacts (local call-screening whitelist)
+        const contactQuery = `
             INSERT INTO trusted_contacts (user_id, name, phone_number, relationship, is_primary, is_guardian, guardian_user_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, name, phone_number, relationship, is_primary, is_guardian, guardian_user_id;
         `;
         
-        const values = [
+        const contactValues = [
             userId, 
             name, 
             phoneNumber, 
             relationship || 'Guardian', 
             isPrimary || false, 
             isGuardian !== undefined ? isGuardian : true,
-            guardianUserId || null // Links to the users table if they have an active app account
+            guardianUserId || null 
         ];
         
-        const result = await pool.query(query, values);
+        const contactResult = await pool.query(contactQuery, contactValues);
+        const savedContact = contactResult.rows[0];
+
+        // 2. If designated as an active guardian with a valid user system account, upsert account_guardians
+        if (isGuardian && guardianUserId) {
+            const guardianLinkQuery = `
+                INSERT INTO account_guardians (guardian_user_id, dependent_user_id, is_active, created_at)
+                VALUES ($1, $2, TRUE, NOW())
+                ON CONFLICT (guardian_user_id, dependent_user_id) 
+                DO UPDATE SET is_active = TRUE;
+            `;
+            // Note: guardianUserId is the caretaker, userId is the senior (dependent)
+            await pool.query(guardianLinkQuery, [guardianUserId, userId]);
+            console.log(`🟢 Synced account_guardians link: Guardian ID ${guardianUserId} -> Dependent ID ${userId}`);
+        }
 
         res.status(201).json({ 
             success: true, 
-            contact: result.rows[0] 
+            contact: savedContact 
         });
     } catch (err) {
-        console.error("❌ Error adding guardian contact:", err);
-        res.status(500).json({ success: false, error: "Failed to add guardian contact." });
+        console.error("❌ Error adding guardian contact & syncing portal:", err);
+        res.status(500).json({ success: false, error: "Failed to add guardian contact and permissions." });
     }
 });
-
 
 // GET /api/guardians/settings/:userId
 app.get('/api/guardians/settings/:userId', async (req, res) => {
