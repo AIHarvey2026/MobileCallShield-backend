@@ -554,24 +554,37 @@ app.get('/api/user/profile', async (req, res) => {
 // ----------------------------------------------------
 // Guardian & Trusted Contacts Management
 // ----------------------------------------------------
-app.get('/api/guardians/:userId', async (req, res) => {
-    const { userId } = req.params;
+app.get('/api/guardians/my-guardians/:dependentUserId', async (req, res) => {
+    const { dependentUserId } = req.params;
+    const parsedUserId = parseInt(dependentUserId, 10);
+
+    if (isNaN(parsedUserId)) {
+        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
+    }
+
     try {
-   const query = `
-    SELECT ag.id, us.user_name as dependent_name, ag.dependent_user_id as dependentUserId, ag.permission_level as relationship, ag.created_at as createdAt
-    FROM account_guardians ag
-    JOIN users us ON us.id = ag.dependent_user_id
-    WHERE ag.guardian_user_id = $1 
-      AND ag.is_active = true
-`;
-const values = [userId];
-const result = await pool.query(query, values);
+        const query = `
+            SELECT 
+                ag.id AS relationship_id,
+                u.id AS guardian_user_id,
+                u.user_name AS name, 
+                u.owner_phone AS phone_number, 
+                ag.permission_level AS relationship,
+                ag.created_at AS created_at
+            FROM account_guardians ag
+            JOIN users u ON ag.guardian_user_id = u.id
+            WHERE ag.dependent_user_id = $1 AND ag.is_active = true
+        `;
 
+        const result = await pool.query(query, [parsedUserId]);
 
-        res.status(200).json(result.rows);
-    } catch (err) {
-        console.error('Error fetching guardians:', err);
-        res.status(500).json({ error: 'Server error fetching guardians.' });
+        return res.status(200).json({
+            success: true,
+            guardians: result.rows || []
+        });
+    } catch (error) {
+        console.error('Error fetching assigned guardians:', error);
+        return res.status(500).json({ success: false, error: 'Server error fetching guardians.' });
     }
 });
 
