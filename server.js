@@ -12,8 +12,6 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const { profanity } = require('@2toad/profanity');
 const cron = require('node-cron'); 
-const { fetchAndStoreTwilioCalls, getWeeklyStatsPerNumber } = require('./services/twilioStatsService');
-const { fetchAndStoreStrideStats, getStrideStatsSummary } = require('./services/strideService');
 
 
 // 1. Initialize Express FIRST
