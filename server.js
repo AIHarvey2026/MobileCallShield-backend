@@ -12,6 +12,8 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const { profanity } = require('@2toad/profanity');
 const cron = require('node-cron'); 
+const { fetchAndStoreTwilioCalls, getWeeklyStatsPerNumber } = require('./services/twilioStatsService');
+const { fetchAndStoreStrideStats, getStrideStatsSummary } = require('./services/strideService');
 
 
 // 1. Initialize Express FIRST
@@ -1258,8 +1260,18 @@ app.get('/api/call-logs/:userId', async (req, res) => {
 
 
 // ----------------------------------------------------
-// Multi-Guardian Scheduled Daily Report Sweep (Runs every hour)
+// Crons Schedule
 // ----------------------------------------------------
+
+// Service imports needed by crons (place before the grouped crons)
+const { fetchAndStoreTwilioCalls } = require('./services/twilioStatsService');
+const { fetchAndStoreStrideStats } = require('./services/strideService');
+
+// ----------------------------------------------------
+// All Scheduled Cron Jobs
+// ----------------------------------------------------
+
+// 1. Hourly Guardian Daily Report Sweep (Runs at :00 every hour)
 cron.schedule('0 * * * *', async () => {
     try {
         const now = new Date();
@@ -1267,16 +1279,15 @@ cron.schedule('0 * * * *', async () => {
 
         console.log(`[Cron Job] Checking guardian report schedules matching hour: ${currentHourStr}`);
 
-        // Fetch each guardian setting row matching current hour
         const guardiansQuery = `
-            SELECT 
+            SELECT
                 grs.owner_id,
                 grs.guardian_id,
                 grs.guardian_phone
             FROM guardian_report_settings grs
             JOIN users u ON grs.owner_id = u.id
-            WHERE u.is_active = true 
-              AND grs.daily_report_enabled = true 
+            WHERE u.is_active = true
+              AND grs.daily_report_enabled = true
               AND grs.report_time LIKE $1
         `;
 
@@ -1285,14 +1296,13 @@ cron.schedule('0 * * * *', async () => {
         for (const guardian of guardiansResult.rows) {
             const { owner_id, guardian_phone } = guardian;
 
-            // Query call statistics for this owner from the last 24 hours
             const summaryQuery = `
-                SELECT 
+                SELECT
                     COUNT(*) AS total_calls,
                     SUM(CASE WHEN risk_label LIKE '%VoIP%' OR risk_label LIKE '%High Risk%' THEN 1 ELSE 0 END) AS high_risk_count,
                     SUM(CASE WHEN call_status = 'voicemail' THEN 1 ELSE 0 END) AS voicemail_count
-                FROM call_logs 
-                WHERE user_id = $1 
+                FROM call_logs
+                WHERE user_id = $1
                   AND created_at >= NOW() - INTERVAL '24 hours';
             `;
 
@@ -1315,6 +1325,64 @@ cron.schedule('0 * * * *', async () => {
         console.error('[Cron Job Error] Failed to process guardian scheduled reports:', err);
     }
 });
+
+// 2. Automated Safety Check-In Sweep (Runs every hour at :15)
+cron.schedule('15 * * * *', async () => {
+    try {
+        const now = new Date();
+        const currentHour = String(now.getHours()).padStart(2, '0');
+        console.log(`[Check-In Cron] Starting sweep at ${currentHour}:15`);
+
+        const checkInQuery = `
+            SELECT
+                pf.id AS portal_feature_id,
+                pf.child_id AS dependent_user_id,
+                u.user_name,
+                u.owner_phone
+            FROM portal_features pf
+            JOIN users u ON pf.child_id = u.id
+            WHERE pf.feature_name ILIKE '%Safety Check-In%'
+              AND pf.is_enabled = true
+              AND u.is_active = true
+        `;
+
+        const result = await pool.query(checkInQuery);
+        console.log(`[Check-In Cron] Matched ${result.rows.length} active check-in configuration(s).`);
+
+        for (const row of result.rows) {
+            try {
+                console.log(`[Check-In Cron] Evaluated dependent ID ${row.dependent_user_id} (${row.user_name})`);
+            } catch (perUserErr) {
+                console.error(`[Check-In Cron] Error processing dependent ID ${row.dependent_user_id}:`, perUserErr);
+            }
+        }
+    } catch (err) {
+        console.error('[Check-In Cron Error] Failed during scheduled sweep:', err);
+    }
+});
+
+// 3. Hourly Stride Stats Sync (Runs at :00 every hour)
+cron.schedule('0 * * * *', async () => {
+    console.log('🔄 [Cron Job] Running sync for stride_stat_data...');
+    try {
+        await fetchAndStoreStrideStats();
+        console.log('✅ [Cron Job] Stride stats sync complete.');
+    } catch (err) {
+        console.error('❌ [Cron Job Error] Failed to sync Stride stats:', err);
+    }
+});
+
+// 4. Midnight Twilio Stats Sync (Runs at 12:00 AM every day)
+cron.schedule('0 0 * * *', async () => {
+    console.log('🔄 [Cron Job] Running midnight sync for Twilio call stats...');
+    try {
+        await fetchAndStoreTwilioCalls(100);
+        console.log('✅ [Cron Job] Midnight Twilio stats sync complete.');
+    } catch (err) {
+        console.error('❌ [Cron Job Error] Failed to sync Twilio call stats:', err);
+    }
+});
+
 
 // ----------------------------------------------------
 // Endpoint to Upsert User Settings
@@ -1479,42 +1547,6 @@ app.post('/api/admin/provision-hub-numbers', async (req, res) => {
     }
 });
 
-/**
- * Background Cron Job: Check regional inventories and send alerts if any hub < 5
- */
-async function checkAllHubsInventoryAndAlert() {
-    try {
-        const query = `
-            SELECT 
-                h.hub_code,
-                h.hub_name,
-                COUNT(n.id) FILTER (WHERE n.user_id IS NULL OR n.status = 'unassigned') AS unassigned_count
-            FROM regional_hubs h
-            LEFT JOIN twilio_numbers n ON h.id = n.hub_id AND n.is_active = true
-            WHERE h.is_active = true
-            GROUP BY h.id, h.hub_code, h.hub_name;
-        `;
-        const result = await pool.query(query);
-
-        for (const hub of result.rows) {
-            const count = parseInt(hub.unassigned_count, 10);
-            console.log(`📊 Hub [${hub.hub_name}] unassigned buffer: ${count}`);
-
-            if (count < 5) {
-                const alertMessage = `⚠️ Low Inventory Alert: Regional Hub "${hub.hub_name}" is down to ${count} unassigned numbers. Restock recommended!`;
-                
-                await twilioClient.messages.create({
-                    body: alertMessage,
-                    from: process.env.TWILIO_ADMIN_SENDER_NUMBER,
-                    to: process.env.ADMIN_PHONE_NUMBER
-                });
-                console.log(`🚨 Sent low-inventory SMS alert for hub: ${hub.hub_code}`);
-            }
-        }
-    } catch (err) {
-        console.error('❌ Error checking hub inventories:', err);
-    }
-}
 
 // ----------------------------------------------------
 // Messaging
@@ -1546,21 +1578,6 @@ app.post('/api/webhook/sms', async (req, res) => {
 // ==========================================
 // Twilio Call Stats Services & Routes
 // ==========================================
-const { 
-  fetchAndStoreTwilioCalls, 
-  getWeeklyStatsPerNumber 
-} = require('./services/twilioStatsService');
-
-// Midnight Twilio Stats Sync (Runs at 12:00 AM every day)
-cron.schedule('0 0 * * *', async () => {
-  console.log('🔄 [Cron Job] Running midnight sync for Twilio call stats...');
-  try {
-    await fetchAndStoreTwilioCalls(100);
-    console.log('✅ [Cron Job] Midnight Twilio stats sync complete.');
-  } catch (err) {
-    console.error('❌ [Cron Job Error] Failed to sync Twilio call stats:', err);
-  }
-});
 
 // Endpoint to view or trigger weekly Twilio stats
 app.get('/api/twilio/stats', async (req, res) => {
@@ -1582,21 +1599,6 @@ app.get('/api/twilio/stats', async (req, res) => {
 // Stride Call Stats Services & Routes
 // ==========================================
 
-const { 
-  fetchAndStoreStrideStats, 
-  getStrideStatsSummary 
-} = require('./services/strideService');
-
-// Hourly or daily sync for Stride stats data (matches your automation pattern)
-cron.schedule('0 * * * *', async () => {
-  console.log('🔄 [Cron Job] Running sync for stride_stat_data...');
-  try {
-    await fetchAndStoreStrideStats();
-    console.log('✅ [Cron Job] Stride stats sync complete.');
-  } catch (err) {
-    console.error('❌ [Cron Job Error] Failed to sync Stride stats:', err);
-  }
-});
 
 // Endpoint to view aggregated Stride stats alongside your receivables/costs workflow
 app.get('/api/stride/stats', async (req, res) => {
