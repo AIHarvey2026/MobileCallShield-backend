@@ -1376,12 +1376,15 @@ cron.schedule('15 * * * *', async () => {
                 pf.id AS portal_feature_id,
                 pf.child_id AS dependent_user_id,
                 u.user_name,
-                u.owner_phone
+                u.owner_phone,
+                u.pause_mode,
+                u.pause_until
             FROM portal_features pf
             JOIN users u ON pf.child_id = u.id
             WHERE pf.feature_name ILIKE '%Safety Check-In%'
               AND pf.is_enabled = true
               AND u.is_active = true
+              AND (u.pause_until IS NULL OR u.pause_until <= NOW())
         `;
 
         const result = await pool.query(checkInQuery);
@@ -1420,7 +1423,6 @@ cron.schedule('0 0 * * *', async () => {
         console.error('❌ [Cron Job Error] Failed to sync Twilio call stats:', err);
     }
 });
-
 
 // ----------------------------------------------------
 // Endpoint to Upsert User Settings
@@ -2023,7 +2025,170 @@ ORDER BY pf.sort_order ASC, pf.sub_sort_order ASC;
     }
 });
 
+// ==========================================
+// TEMPORARY QUIET / VACATION PAUSE ENDPOINTS
+// ==========================================
 
+// Helper function to calculate next 8:00 AM Central Time
+function getNext8AmCentralDate(now = new Date()) {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Chicago',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
+
+    const parts = formatter.formatToParts(now).reduce((acc, p) => {
+        if (p.type !== 'literal') acc[p.type] = p.value;
+        return acc;
+    }, {});
+
+    let year = parseInt(parts.year, 10);
+    let month = parseInt(parts.month, 10);
+    let day = parseInt(parts.day, 10);
+    const currentHour = parseInt(parts.hour, 10);
+
+    if (currentHour >= 8) {
+        const advance = new Date(Date.UTC(year, month - 1, day + 1));
+        year = advance.getUTCFullYear();
+        month = advance.getUTCMonth() + 1;
+        day = advance.getUTCDate();
+    }
+
+    const probeUtc = new Date(Date.UTC(year, month - 1, day, 14, 0, 0));
+    const tzName = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Chicago',
+        timeZoneName: 'short'
+    }).formatToParts(probeUtc).find(p => p.type === 'timeZoneName')?.value;
+
+    const offset = tzName === 'CDT' ? '-05:00' : '-06:00';
+    const mm = String(month).padStart(2, '0');
+    const dd = String(day).padStart(2, '0');
+
+    return new Date(`${year}-${mm}-${dd}T08:00:00${offset}`);
+}
+
+// 1. SET PAUSE MODE
+app.post('/api/user/pause-shield', async (req, res) => {
+    const { userId, mode, durationHours, untilTomorrowMorning, vacationDays, endDate } = req.body;
+    const parsedUserId = parseInt(userId, 10);
+
+    if (isNaN(parsedUserId) || !['dnd', 'vacation'].includes(mode)) {
+        return res.status(400).json({ success: false, error: 'Valid userId and mode (dnd or vacation) are required' });
+    }
+
+    try {
+        let pauseUntilDate = null;
+        const now = new Date();
+
+        if (mode === 'dnd') {
+            if (untilTomorrowMorning) {
+                pauseUntilDate = getNext8AmCentralDate(now);
+            } else {
+                const hours = parseInt(durationHours, 10);
+                if (![1, 2, 4].includes(hours)) {
+                    return res.status(400).json({ success: false, error: 'DND durationHours must be 1, 2, or 4' });
+                }
+                pauseUntilDate = new Date(now.getTime() + hours * 60 * 60 * 1000);
+            }
+        } else if (mode === 'vacation') {
+            if (endDate) {
+                pauseUntilDate = new Date(endDate);
+            } else {
+                const days = parseInt(vacationDays, 10);
+                if (isNaN(days) || days < 1 || days > 30) {
+                    return res.status(400).json({ success: false, error: 'Vacation days must be between 1 and 30' });
+                }
+                pauseUntilDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+            }
+        }
+
+        if (!pauseUntilDate || isNaN(pauseUntilDate.getTime()) || pauseUntilDate <= now) {
+            return res.status(400).json({ success: false, error: 'Invalid expiration timestamp' });
+        }
+
+        const result = await pool.query(
+            `UPDATE users
+             SET pause_mode = $1, pause_until = $2
+             WHERE id = $3
+             RETURNING id, pause_mode, pause_until`,
+            [mode, pauseUntilDate.toISOString(), parsedUserId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        return res.json({
+            success: true,
+            pauseMode: result.rows[0].pause_mode,
+            pauseUntil: result.rows[0].pause_until
+        });
+    } catch (error) {
+        console.error('Error setting pause shield:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 2. RESUME PROTECTION NOW
+app.post('/api/user/resume-shield', async (req, res) => {
+    const { userId } = req.body;
+    const parsedUserId = parseInt(userId, 10);
+
+    if (isNaN(parsedUserId)) {
+        return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    try {
+        await pool.query(
+            `UPDATE users
+             SET pause_mode = NULL, pause_until = NULL
+             WHERE id = $1`,
+            [parsedUserId]
+        );
+        return res.json({ success: true, pauseMode: null, pauseUntil: null });
+    } catch (error) {
+        console.error('Error resuming shield:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 3. READ PAUSE STATUS
+app.get('/api/user/pause-status/:userId', async (req, res) => {
+    const parsedUserId = parseInt(req.params.userId, 10);
+
+    if (isNaN(parsedUserId)) {
+        return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    try {
+        const result = await pool.query(
+            `SELECT pause_mode, pause_until FROM users WHERE id = $1`,
+            [parsedUserId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+
+        const row = result.rows[0];
+        const now = new Date();
+        const isPaused = row.pause_until && new Date(row.pause_until) > now;
+
+        return res.json({
+            success: true,
+            isPaused: Boolean(isPaused),
+            pauseMode: isPaused ? row.pause_mode : null,
+            pauseUntil: isPaused ? row.pause_until : null
+        });
+    } catch (error) {
+        console.error('Error getting pause status:', error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // ==========================================
 // Server Start
