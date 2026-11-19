@@ -408,6 +408,46 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
+
+app.get('/api/settings', (req, res) => {
+    res.json({
+        success: true,
+        settings: {
+            app_name: "Mobile Call Shield",
+            logo_url: ""
+        }
+    });
+});
+
+// Get the latest MCS version
+app.get('/api/app-version/latest', async (req, res) => {
+    try {
+        const platform = (req.query.platform || 'all').trim().toLowerCase();
+
+        const query = `
+            SELECT id, platform, version_code, build_number, release_notes, is_latest, is_required, released_at
+            FROM app_versions
+            WHERE ($1 = 'all' OR platform = $1 OR platform = 'all')
+            ORDER BY is_latest DESC, build_number DESC, id DESC
+            LIMIT 1;
+        `;
+
+        const result = await pool.query(query, [platform]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'No version record found.' });
+        }
+
+        res.json({
+            success: true,
+            version: result.rows[0]
+        });
+    } catch (err) {
+        console.error('Error fetching latest app version:', err);
+        res.status(500).json({ success: false, error: 'Server error fetching latest app version.' });
+    }
+});
+
 app.get('/api/settings', (req, res) => {
     res.json({
         success: true,
