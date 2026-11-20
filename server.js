@@ -2073,7 +2073,7 @@ function getNext8AmCentralDate(now = new Date()) {
 
 // Resume primary shield protection
 app.post('/api/user/resume-shield', async (req, res) => {
-    const { userId, guardianPin, resumedByUserId } = req.body;
+    const { userId, resumedByUserId } = req.body;
     const parsedUserId = parseInt(userId, 10);
 
     if (isNaN(parsedUserId)) {
@@ -2081,72 +2081,55 @@ app.post('/api/user/resume-shield', async (req, res) => {
     }
 
     try {
-        // Optional: check if a primary guardian exists for this dependent
-        const guardianCheck = await pool.query(
-            `SELECT guardian_user_id
-             FROM account_guardians
-             WHERE dependent_user_id = $1
-               AND permission_level = 'primary'
-             LIMIT 1`,
-            [parsedUserId]
-        );
-        const hasPrimaryGuardian = guardianCheck.rowCount > 0;
+        // If initiated remotely by a guardian, verify guardian-dependent relationship
+        if (resumedByUserId) {
+            const parsedGuardianId = parseInt(resumedByUserId, 10);
+            if (isNaN(parsedGuardianId)) {
+                return res.status(400).json({ success: false, error: 'Invalid resumedByUserId' });
+            }
 
-        // If you want guardians able to cancel/resume from a guardian view,
-        // allow either the dependent or an authorized guardian to call /resume-shield.
-        // If you want to require guardianPin when hasPrimaryGuardian is true on vacation pauses:
-        const currentUserRes = await pool.query(
-            `SELECT pause_mode, pause_until FROM users WHERE id = $1`,
+            const linkCheck = await pool.query(
+                `SELECT id 
+                 FROM account_guardians 
+                 WHERE dependent_user_id = $1 
+                   AND guardian_user_id = $2
+                 LIMIT 1`,
+                [parsedUserId, parsedGuardianId]
+            );
+
+            if (linkCheck.rowCount === 0) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Unauthorized: You are not assigned as a guardian for this account'
+                });
+            }
+        }
+
+        // Clear pause status for the targeted dependent
+        const result = await pool.query(
+            `UPDATE users
+             SET pause_mode = NULL, pause_until = NULL
+             WHERE id = $1
+             RETURNING id, pause_mode, pause_until`,
             [parsedUserId]
         );
-        if (currentUserRes.rowCount === 0) {
+
+        if (result.rowCount === 0) {
             return res.status(404).json({ success: false, error: 'User not found' });
         }
 
-        const activeMode = currentUserRes.rows[0].pause_mode;
-        if (hasPrimaryGuardian && activeMode === 'vacation' && !resumedByUserId) {
-            if (!guardianPin) {
-                return res.status(403).json({
-                    success: false,
-                    requiresGuardianPin: true,
-                    error: 'Primary Guardian PIN required to end Vacation Mode early'
-                });
-            }
-            // Verify guardianPin against the guardian's user record if your schema stores PINs on users
-            const pinCheck = await pool.query(
-                `SELECT u.id
-                 FROM account_guardians ag
-                 JOIN users u ON ag.guardian_user_id = u.id
-                 WHERE ag.dependent_user_id = $1
-                   AND ag.permission_level = 'primary'
-                   AND u.pin = $2
-                 LIMIT 1`,
-                [parsedUserId, String(guardianPin)]
-            );
-            if (pinCheck.rowCount === 0) {
-                return res.status(401).json({ success: false, error: 'Incorrect Primary Guardian PIN' });
-            }
-        }
-
-        await pool.query(
-            `UPDATE users
-             SET pause_mode = NULL, pause_until = NULL
-             WHERE id = $1`,
-            [parsedUserId]
-        );
-
         return res.json({
             success: true,
+            message: 'Shield protection successfully resumed',
+            userId: parsedUserId,
             pauseMode: null,
-            pauseUntil: null,
-            hasPrimaryGuardian
+            pauseUntil: null
         });
     } catch (error) {
-        console.error('Error resuming shield:', error);
+        console.error('[Resume Shield Error]:', error);
         return res.status(500).json({ success: false, error: error.message });
     }
 });
-
 // 1. SET PAUSE MODE
 app.post('/api/user/pause-shield', async (req, res) => {
     const { userId, mode, durationHours, untilTomorrowMorning, vacationDays, endDate } = req.body;
