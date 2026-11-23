@@ -976,6 +976,39 @@ app.post('/api/twilio/voice', async (req, res) => {
             return res.send(twiml.toString());
         }
 
+        // FOLLOW-UP AFTER BRIDGED CALL: If this caller was just bridged to owner_phone and it bounced back unanswered
+        const recentBridgeCheck = await dbClient.query(
+            `SELECT id FROM call_logs
+             WHERE user_id = $1
+               AND (from_number = $2 OR from_number = $3)
+               AND call_status = 'bridged_attempt'
+               AND created_at > NOW() - INTERVAL '2 minutes'
+             LIMIT 1`,
+            [userId, From, normalizedFrom]
+        );
+
+        if (recentBridgeCheck.rows.length > 0) {
+            await dbClient.query(
+                `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
+                 VALUES ($1, $2, $3, $4, 'voicemail', $5, 'PENDING', 'Pending Lookup', 'Evaluating...', NOW())
+                 ON CONFLICT (call_sid) DO UPDATE
+                 SET call_status = EXCLUDED.call_status`,
+                [CallSid, userId, normalizedFrom, normalizedTo, Direction || 'inbound']
+            );
+
+            const twiml = new VoiceResponse();
+            twiml.say(`${ownerLabel} is not available right now. You can leave a voicemail after the tone.`);
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true,
+                transcribeCallback: '/api/twilio/voicemail-transcription'
+            });
+            res.type('text/xml');
+            return res.send(twiml.toString());
+        }
+
         await dbClient.query(
             `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'Pending Lookup', 'Evaluating...', NOW())
@@ -1096,44 +1129,57 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
                 passcode = userFallback.rows[0].passcode || '1234';
             }
         }
+
+        const normalizedPasscode = String(passcode).trim().toLowerCase();
+        const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
+
+        if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
+            if (CallSid) {
+                await dbClient.query(
+                    `UPDATE call_logs SET call_status = 'bridged_attempt' WHERE call_sid = $1`,
+                    [CallSid]
+                );
+            }
+            twiml.say('Connecting your urgent medical call.');
+            if (ownerPhone) {
+                twiml.dial(ownerPhone);
+            } else {
+                twiml.say('Owner phone not configured.');
+            }
+            res.type('text/xml');
+            return res.send(twiml.toString());
+        }
+
+        if (isMatch) {
+            if (CallSid) {
+                await dbClient.query(
+                    `UPDATE call_logs SET call_status = 'bridged_attempt' WHERE call_sid = $1`,
+                    [CallSid]
+                );
+            }
+            twiml.say('Passcode accepted. Connecting your call.');
+            if (ownerPhone) {
+                twiml.dial(ownerPhone);
+            } else {
+                twiml.say('Owner phone not configured.');
+            }
+        } else {
+            twiml.say('Passcode not recognized. Please leave a message after the tone.');
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true,
+                transcribeCallback: '/api/twilio/voicemail-transcription'
+            });
+        }
     } catch (err) {
         console.error('[Verify Passcode DB Error]:', err);
+        twiml.say('An application error has occurred.');
     } finally {
         if (dbClient) {
             dbClient.release();
         }
-    }
-
-    const normalizedPasscode = String(passcode).trim().toLowerCase();
-    const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
-
-    if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
-        twiml.say('Connecting your urgent medical call.');
-        if (ownerPhone) {
-            twiml.dial(ownerPhone);
-        } else {
-            twiml.say('Owner phone not configured.');
-        }
-        res.type('text/xml');
-        return res.send(twiml.toString());
-    }
-
-    if (isMatch) {
-        twiml.say('Passcode accepted. Connecting your call.');
-        if (ownerPhone) {
-            twiml.dial(ownerPhone);
-        } else {
-            twiml.say('Owner phone not configured.');
-        }
-    } else {
-        twiml.say('Passcode not recognized. Please leave a message after the tone.');
-        twiml.record({
-            action: '/api/twilio/handle-voicemail',
-            method: 'POST',
-            maxLength: 60,
-            transcribe: true,
-            transcribeCallback: '/api/twilio/voicemail-transcription'
-        });
     }
 
     res.type('text/xml');
