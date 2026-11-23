@@ -11,8 +11,8 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 const bodyParser = require('body-parser');
 const { profanity } = require('@2toad/profanity');
-const cron = require('node-cron'); 
-
+const cron = require('node-cron');
+const { Readable } = require('stream');
 
 // 1. Initialize Express FIRST
 const app = express();
@@ -29,7 +29,6 @@ const pool = new Pool({
         rejectUnauthorized: false
     }
 });
-
 
 // 3. Global Middleware & Static Files
 app.use(express.static('public'));
@@ -74,8 +73,6 @@ const authLimiter = rateLimit({
 async function sendGuardianSMS(toPhoneNumber, messageBody, assignedTwilioNumber = null) {
     if (!toPhoneNumber) return;
     try {
-        // Uses the user's specific assigned regional number if available, 
-        // otherwise falls back to the main administrative environment variable.
         const senderNumber = assignedTwilioNumber || process.env.TWILIO_PHONE_NUMBER || TWILIO_NUMBER;
 
         await twilioClient.messages.create({
@@ -93,7 +90,7 @@ async function sendGuardianSMS(toPhoneNumber, messageBody, assignedTwilioNumber 
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '465', 10),
-    secure: parseInt(process.env.SMTP_PORT || '465', 10) === 465, // true for 465, false for 587
+    secure: parseInt(process.env.SMTP_PORT || '465', 10) === 465,
     auth: {
         user: process.env.ADMIN_EMAIL || process.env.EMAIL_USER,
         pass: process.env.ADMIN_EMAIL_PASS || process.env.EMAIL_PASS
@@ -160,8 +157,8 @@ function sanitizeAndValidateMessageName(nameInput) {
 // -----------------------------------------------------------------------------------------
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Expects "Bearer <token>"
-   
+    const token = authHeader && authHeader.split(' ')[1];
+
     if (!token) {
         return res.status(401).json({ success: false, error: 'Access token required.' });
     }
@@ -207,12 +204,12 @@ app.get('/api/admin/users', authenticateToken, async (req, res) => {
 // Inventory Check Endpoint
 app.get('/api/admin/check-number-inventory', async (req, res) => {
     try {
-	const query = 'SELECT COUNT(*) FROM twilio_numbers WHERE user_id IS NULL OR is_active = false';
+        const query = 'SELECT COUNT(*) FROM twilio_numbers WHERE user_id IS NULL OR is_active = false';
         const result = await pool.query(query);
         const availableCount = parseInt(result.rows[0].count, 10);
-        
-        const threshold = 5; // Alert threshold
-        
+
+        const threshold = 5;
+
         if (availableCount <= threshold) {
             await sendLowInventoryAlert(availableCount);
         }
@@ -260,15 +257,15 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             return res.status(409).json({ error: 'An account with this phone number or email already exists.' });
         }
 
-      const userPasscode = passcode ? passcode.trim().toLowerCase() : '1234';
+        const userPasscode = passcode ? passcode.trim().toLowerCase() : '1234';
         const passwordHash = await bcrypt.hash(String(password), 10);
-        
-        const finalQuestion = securityQuestion && securityQuestion.trim() !== '' 
-            ? securityQuestion.trim() 
+
+        const finalQuestion = securityQuestion && securityQuestion.trim() !== ''
+            ? securityQuestion.trim()
             : "What was the name of your first pet?";
-            
-        const finalAnswer = securityAnswer && securityAnswer.trim() !== '' 
-            ? securityAnswer.trim().toLowerCase() 
+
+        const finalAnswer = securityAnswer && securityAnswer.trim() !== ''
+            ? securityAnswer.trim().toLowerCase()
             : "fluffy";
 
         const trialEnd = new Date();
@@ -283,9 +280,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         const newUserId = newUser.rows[0].id;
 
-        // -------------------------------------------------------------------------
         // Regional Hub Phone Number Assignment Logic
-        // -------------------------------------------------------------------------
         let assignedPhoneNumber = null;
         let phoneRow = null;
 
@@ -294,7 +289,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             const userAreaCode = cleanDigits.length >= 10 ? cleanDigits.slice(-10, -7) : null;
 
             if (userAreaCode) {
-                // Try to find an unassigned number matching the user's regional hub area code
                 const hubMatchQuery = await client.query(
                     `SELECT n.id, n.phone_number FROM twilio_numbers n
                      JOIN hub_area_codes ac ON n.hub_id = ac.hub_id
@@ -309,7 +303,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             }
         }
 
-        // Fallback: If no local hub match found, grab any available unassigned number globally
         if (!phoneRow) {
             const fallbackQuery = await client.query(
                 `SELECT id, phone_number FROM twilio_numbers
@@ -321,10 +314,9 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             }
         }
 
-        // Assign the selected number to the new user
         if (phoneRow) {
             assignedPhoneNumber = phoneRow.phone_number;
-            
+
             await client.query(
                 `UPDATE twilio_numbers SET user_id = $1, is_active = true WHERE id = $2`,
                 [newUserId, phoneRow.id]
@@ -335,7 +327,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 [assignedPhoneNumber, newUserId]
             );
         }
-        // -------------------------------------------------------------------------
 
         await client.query('COMMIT');
 
@@ -408,7 +399,6 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
-
 app.get('/api/settings', (req, res) => {
     res.json({
         success: true,
@@ -448,16 +438,6 @@ app.get('/api/app-version/latest', async (req, res) => {
     }
 });
 
-app.get('/api/settings', (req, res) => {
-    res.json({
-        success: true,
-        settings: {
-            app_name: "Mobile Call Shield",
-            logo_url: ""
-        }
-    });
-});
-
 // ----------------------------------------------------
 // User Settings & Profile
 // ----------------------------------------------------
@@ -482,8 +462,8 @@ app.post('/api/user/update-message-name', async (req, res) => {
 
         res.json({
             success: true,
-            message: sanitizedName 
-                ? `Greeting name updated to "${sanitizedName}".` 
+            message: sanitizedName
+                ? `Greeting name updated to "${sanitizedName}".`
                 : 'Greeting name cleared. Calls will use the default privacy message.',
             messageName: sanitizedName
         });
@@ -494,41 +474,40 @@ app.post('/api/user/update-message-name', async (req, res) => {
 });
 
 app.post('/api/user/deactivate', async (req, res) => {
-  const { userId, guardianPin } = req.body;
+    const { userId, guardianPin } = req.body;
 
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
-
-  try {
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+    if (!userId) {
+        return res.status(400).json({ error: 'Missing userId' });
     }
 
-    const user = userResult.rows[0];
+    try {
+        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
 
-    if (user.primary_guardian_id) {
-      if (!guardianPin) {
-        return res.status(401).json({ error: 'Primary Guardian PIN required' });
-      }
-      const guardianResult = await pool.query('SELECT * FROM guardians WHERE id = $1 AND pin = $2', [user.primary_guardian_id, guardianPin]);
-      if (guardianResult.rows.length === 0) {
-        return res.status(401).json({ error: 'Incorrect Guardian PIN' });
-      }
+        const user = userResult.rows[0];
+
+        if (user.primary_guardian_id) {
+            if (!guardianPin) {
+                return res.status(401).json({ error: 'Primary Guardian PIN required' });
+            }
+            const guardianResult = await pool.query('SELECT * FROM guardians WHERE id = $1 AND pin = $2', [user.primary_guardian_id, guardianPin]);
+            if (guardianResult.rows.length === 0) {
+                return res.status(401).json({ error: 'Incorrect Guardian PIN' });
+            }
+        }
+
+        await pool.query('UPDATE users SET is_active = false WHERE id = $1', [userId]);
+
+        res.json({
+            success: true,
+            message: 'Account successfully deactivated and subscription stopped.'
+        });
+    } catch (error) {
+        console.error('Deactivation error:', error);
+        res.status(500).json({ error: 'Internal server error during deactivation' });
     }
-
-    await pool.query('UPDATE users SET is_active = false WHERE id = $1', [userId]);
-
-    res.json({
-      success: true,
-      message: 'Account successfully deactivated and subscription stopped.'
-    });
-
-  } catch (error) {
-    console.error('Deactivation error:', error);
-    res.status(500).json({ error: 'Internal server error during deactivation' });
-  }
 });
 
 app.put('/api/user/toggle-shield', async (req, res) => {
@@ -574,17 +553,16 @@ app.get('/api/user/profile', async (req, res) => {
 
         const user = result.rows[0];
         console.log(`[Backend Profile] Found user record:`, user);
-        
+
         res.json({
             user: {
                 id: user.id,
                 email: user.email,
                 carrier_name: user.carrier_name,
-                assignedTwilioNumber: user.twilio_screening_number, 
+                assignedTwilioNumber: user.twilio_screening_number,
                 subscriptionStatus: user.subscription_status
             }
         });
-
     } catch (err) {
         console.error('[Backend Profile] Error fetching user profile:', err);
         res.status(500).json({ error: 'Internal server error' });
@@ -604,11 +582,11 @@ app.get('/api/guardians/my-guardians/:dependentUserId', async (req, res) => {
 
     try {
         const query = `
-            SELECT 
+            SELECT
                 ag.id AS relationship_id,
                 u.id AS guardian_user_id,
-                u.user_name AS name, 
-                u.owner_phone AS phone_number, 
+                u.user_name AS name,
+                u.owner_phone AS phone_number,
                 ag.permission_level AS relationship,
                 ag.created_at AS created_at
             FROM account_guardians ag
@@ -632,22 +610,22 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
         const query = `
-            SELECT id, name, phone_number, is_guardian, is_primary 
-            FROM trusted_contacts 
+            SELECT id, name, phone_number, is_guardian, is_primary
+            FROM trusted_contacts
             WHERE user_id = $1
             ORDER BY name ASC
         `;
         const result = await pool.query(query, [userId]);
-        
+
         const formattedRows = result.rows.map(row => ({
             id: row.id,
             name: row.name,
-            phone: row.phone_number, // Keep as single string to match Android's optString("phone")
+            phone: row.phone_number,
             phone_number: row.phone_number,
-            is_guardian: true, // Force true so they populate as guardians in the settings screen
+            is_guardian: true,
             is_primary: row.is_primary || false
         }));
-        
+
         res.json(formattedRows);
     } catch (err) {
         console.error("❌ Error fetching trusted contacts:", err);
@@ -657,7 +635,7 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
 
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     const { userId, contacts } = req.body;
-    
+
     if (!userId || !contacts || !Array.isArray(contacts)) {
         return res.status(400).json({ error: "userId and contacts array are required." });
     }
@@ -671,16 +649,14 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
                 if (Array.isArray(contact.phone_numbers) && contact.phone_numbers.length > 0) {
                     rawPhone = contact.phone_numbers[0];
                 } else if (Array.isArray(contact.phoneNumbers) && contact.phoneNumbers.length > 0) {
-                    // Handles React Native / Expo contact picker structures
                     const entry = contact.phoneNumbers[0];
                     rawPhone = typeof entry === 'string' ? entry : (entry.number || entry.digits || '');
                 } else if (contact.phone_number) {
                     rawPhone = contact.phone_number;
                 }
 
-                // Automatically format the phone number to E.164 (+1...)
                 const phone = toE164(rawPhone);
-                if (!phone) continue; // Skip invalid numbers
+                if (!phone) continue;
 
                 const query = `
                     INSERT INTO trusted_contacts (user_id, name, phone_number, is_guardian, is_primary)
@@ -722,18 +698,15 @@ app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Ensure is_primary column exists (safe no-op if already present)
         await client.query(
             'ALTER TABLE trusted_contacts ADD COLUMN IF NOT EXISTS is_primary BOOLEAN DEFAULT FALSE'
         );
 
-        // Step 1: Remove primary flag from all user's contacts
         await client.query(
             'UPDATE trusted_contacts SET is_primary = false WHERE user_id = $1',
             [userId]
         );
 
-        // Step 2: Set target contact as Primary and ensure Guardian flag is active
         const result = await client.query(
             'UPDATE trusted_contacts SET is_primary = true, is_guardian = true WHERE id = $1 AND user_id = $2 RETURNING *',
             [contactId, userId]
@@ -747,7 +720,6 @@ app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
         const updatedContact = result.rows[0];
         await client.query('COMMIT');
 
-        // Step 3: Optionally sync phone to users table without rolling back Step 1 & 2
         try {
             const guardianPhone =
                 updatedContact.phone_number ||
@@ -781,8 +753,7 @@ app.put('/api/trusted_contacts/:id', async (req, res) => {
 
     try {
         dbClient = await pool.connect();
-       
-        // 1. If setting this contact as primary, fetch the user_id and reset everyone else first
+
         if (is_primary) {
             const contactCheck = await dbClient.query(`SELECT user_id FROM trusted_contacts WHERE id = $1`, [contactId]);
             if (contactCheck.rows.length > 0) {
@@ -794,7 +765,6 @@ app.put('/api/trusted_contacts/:id', async (req, res) => {
             }
         }
 
-        // 2. Perform the update for the target contact
         const updateQuery = await dbClient.query(
             `UPDATE trusted_contacts
              SET name = COALESCE($1, name),
@@ -891,7 +861,6 @@ app.post('/api/settings/update-passcode', async (req, res) => {
             message: 'Passcode phrase updated successfully!',
             passcode: result.rows[0].passcode
         });
-
     } catch (err) {
         console.error('Error updating passcode:', err);
         return res.status(500).json({ success: false, error: 'Server error updating passcode.' });
@@ -911,9 +880,9 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
         const carrierName = lineTypeData?.carrierName || 'Unknown Carrier';
 
         const frequencyQuery = `
-            SELECT COUNT(*) AS call_count 
-            FROM call_logs 
-            WHERE from_number = $1 
+            SELECT COUNT(*) AS call_count
+            FROM call_logs
+            WHERE from_number = $1
               AND created_at >= NOW() - INTERVAL '24 hours';
         `;
         const freqResult = await pool.query(frequencyQuery, [phoneNumber]);
@@ -933,14 +902,13 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
         }
 
         await pool.query(
-            `UPDATE call_logs 
-             SET line_type = $1, carrier = $2, risk_label = $3 
+            `UPDATE call_logs
+             SET line_type = $1, carrier = $2, risk_label = $3
              WHERE call_sid = $4`,
             [lineType, carrierName, label, CallSid]
         );
         console.log(`[Lookup Complete] Call SID ${CallSid}: Line=${lineType}, Carrier=${carrierName}`);
 
-        // Automatically send SMS alert if flagged as high risk
         if (isHighRisk) {
             const userQuery = await pool.query('SELECT owner_phone FROM users WHERE id = $1', [userId]);
             if (userQuery.rows.length > 0 && userQuery.rows[0].owner_phone) {
@@ -949,7 +917,6 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
                 await sendGuardianSMS(ownerPhone, alertMessage);
             }
         }
-
     } catch (err) {
         console.error('[EVALUATE BACKGROUND] Error fetching Twilio lookup:', err);
     }
@@ -960,16 +927,20 @@ async function evaluateAndLogCallerAsync(CallSid, phoneNumber, userId) {
 // ----------------------------------------------------
 app.post('/api/twilio/voice', async (req, res) => {
     const { CallSid, From, To, CallStatus, Direction } = req.body;
-    
-    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${From}, To=${To}, Status=${CallStatus}`);
+    const normalizedFrom = toE164(From) || From;
+    const normalizedTo = toE164(To) || To;
+
+    console.log(`[Twilio Webhook] Incoming call: SID=${CallSid}, From=${normalizedFrom}, To=${normalizedTo}, Status=${CallStatus}`);
 
     const dbClient = await pool.connect();
     try {
         const userQuery = await dbClient.query(
-            `SELECT u.id AS user_id, u.owner_phone, u.is_call_shield_enabled, u.message_name FROM users u 
-             JOIN twilio_numbers tn ON u.id = tn.user_id 
-             WHERE tn.phone_number = $1 LIMIT 1`,
-            [To]
+            `SELECT u.id AS user_id, u.user_name, u.owner_phone, u.is_call_shield_enabled, u.message_name
+             FROM users u
+             JOIN twilio_numbers tn ON u.id = tn.user_id
+             WHERE tn.phone_number = $1 OR tn.phone_number = $2
+             LIMIT 1`,
+            [To, normalizedTo]
         );
 
         if (userQuery.rows.length === 0) {
@@ -979,16 +950,19 @@ app.post('/api/twilio/voice', async (req, res) => {
 
         const user = userQuery.rows[0];
         const userId = user.user_id;
+        const ownerLabel = user.message_name || user.user_name || 'the owner';
 
         // LOOP PREVENTION: Strict 10-Second Window for Rapid Carrier Bounces ONLY
         const rapidBounceCheck = await dbClient.query(
-            `SELECT id FROM call_logs 
-             WHERE user_id = $1 AND from_number = $2 AND created_at > NOW() - INTERVAL '10 seconds'`,
-            [userId, From]
+            `SELECT id FROM call_logs
+             WHERE user_id = $1
+               AND (from_number = $2 OR from_number = $3)
+               AND created_at > NOW() - INTERVAL '10 seconds'`,
+            [userId, From, normalizedFrom]
         );
 
         if (rapidBounceCheck.rows.length > 0) {
-            console.log(`[Twilio Webhook] Rapid carrier bounce detected within 10 seconds for caller ${From}. Sending to voicemail to prevent loop.`);
+            console.log(`[Twilio Webhook] Rapid carrier bounce detected within 10 seconds for caller ${normalizedFrom}. Sending to voicemail to prevent loop.`);
             const twiml = new VoiceResponse();
             twiml.say('Please leave a message after the tone.');
             twiml.record({
@@ -1005,38 +979,48 @@ app.post('/api/twilio/voice', async (req, res) => {
         await dbClient.query(
             `INSERT INTO call_logs (call_sid, user_id, from_number, to_number, call_status, direction, line_type, carrier, risk_label, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'Pending Lookup', 'Evaluating...', NOW())
-             ON CONFLICT (call_sid) DO UPDATE 
+             ON CONFLICT (call_sid) DO UPDATE
              SET call_status = EXCLUDED.call_status`,
-            [CallSid, userId, From, To, CallStatus || 'ringing', Direction || 'inbound']
+            [CallSid, userId, normalizedFrom, normalizedTo, CallStatus || 'ringing', Direction || 'inbound']
         );
 
-        evaluateAndLogCallerAsync(CallSid, From, userId);
+        evaluateAndLogCallerAsync(CallSid, normalizedFrom, userId);
 
         const twiml = new VoiceResponse();
 
+        // 1. IF CALL SHIELD IS DISABLED: Take a voicemail directly (Do NOT <Dial> owner_phone back)
         if (user.is_call_shield_enabled === false) {
-            if (user.owner_phone) {
-                twiml.say('Connecting your call.');
-                twiml.dial(user.owner_phone);
-            } else {
-                twiml.say('Call screening is currently paused, but no owner phone is configured.');
-            }
+            twiml.say('Call screening is paused. Please leave a message after the tone.');
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true,
+                transcribeCallback: '/api/twilio/voicemail-transcription'
+            });
             res.type('text/xml');
             return res.send(twiml.toString());
         }
 
         const contactCheck = await dbClient.query(
-            `SELECT id FROM trusted_contacts WHERE user_id = $1 AND phone_number = $2`,
-            [userId, From]
+            `SELECT id FROM trusted_contacts
+             WHERE user_id = $1 AND (phone_number = $2 OR phone_number = $3)`,
+            [userId, From, normalizedFrom]
         );
         const isTrusted = contactCheck.rows.length > 0;
 
+        // 2. IF TRUSTED CONTACT: Take a direct message without looping back to owner_phone
         if (isTrusted) {
-            twiml.say('Connecting your trusted contact.');
-            if (user.owner_phone) {
-                twiml.dial(user.owner_phone);
-            }
-       } else {
+            twiml.say(`You are verified as a trusted contact. ${ownerLabel} is unavailable to answer right now, so please leave a message after the tone.`);
+            twiml.record({
+                action: '/api/twilio/handle-voicemail',
+                method: 'POST',
+                maxLength: 60,
+                transcribe: true,
+                transcribeCallback: '/api/twilio/voicemail-transcription'
+            });
+        } else {
+            // 3. UNTRUSTED / UNKNOWN CALLER: Interactive passcode gather
             const gather = twiml.gather({
                 input: 'speech dtmf',
                 action: '/api/twilio/verify-passcode',
@@ -1044,9 +1028,8 @@ app.post('/api/twilio/voice', async (req, res) => {
                 timeout: 5,
                 speechTimeout: 'auto'
             });
-        
-            const greetingName = user.message_name || 'the owner';
-            gather.say(`This is Mobile Call Shield protecting ${greetingName}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
+
+            gather.say(`This is Mobile Call Shield protecting ${ownerLabel}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
 
             twiml.say('No passcode received. Please leave a message after the tone.');
             twiml.record({
@@ -1090,9 +1073,9 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
     try {
         dbClient = await pool.connect();
         const callQuery = await dbClient.query(
-            `SELECT c.user_id, u.owner_phone, u.passcode 
-             FROM call_logs c 
-             JOIN users u ON c.user_id = u.id 
+            `SELECT c.user_id, u.owner_phone, u.passcode
+             FROM call_logs c
+             JOIN users u ON c.user_id = u.id
              WHERE c.call_sid = $1 LIMIT 1`,
             [CallSid]
         );
@@ -1102,9 +1085,9 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             passcode = callQuery.rows[0].passcode || '1234';
         } else if (To) {
             const userFallback = await dbClient.query(
-                `SELECT u.id, u.owner_phone, u.passcode 
-                 FROM users u 
-                 JOIN twilio_numbers tn ON u.id = tn.user_id 
+                `SELECT u.id, u.owner_phone, u.passcode
+                 FROM users u
+                 JOIN twilio_numbers tn ON u.id = tn.user_id
                  WHERE tn.phone_number = $1 LIMIT 1`,
                 [To]
             );
@@ -1121,10 +1104,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         }
     }
 
-    // Normalize the database passcode AFTER it is successfully fetched from DB
     const normalizedPasscode = String(passcode).trim().toLowerCase();
-
-    // Check match against keypad digits or lowercase speech input
     const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
 
     if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
@@ -1170,9 +1150,9 @@ app.post('/api/twilio/handle-voicemail', async (req, res) => {
     const dbClient = await pool.connect();
     try {
         const updateResult = await dbClient.query(
-            `UPDATE call_logs 
-             SET voicemail_url = $1, call_status = 'voicemail' 
-             WHERE call_sid = $2 
+            `UPDATE call_logs
+             SET voicemail_url = $1, call_status = 'voicemail'
+             WHERE call_sid = $2
              RETURNING user_id, from_number`,
             [RecordingUrl, CallSid]
         );
@@ -1188,7 +1168,7 @@ app.post('/api/twilio/handle-voicemail', async (req, res) => {
             if (userQuery.rows.length > 0 && userQuery.rows[0].owner_phone) {
                 const guardianPhone = userQuery.rows[0].owner_phone;
                 const alertMessage = `🛡️ Senior Scam Shield Alert:\nNew voicemail recorded from unknown caller ${from_number}. Check your app to listen.`;
-                
+
                 await sendGuardianSMS(guardianPhone, alertMessage);
             }
         }
@@ -1215,8 +1195,8 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
         const dbClient = await pool.connect();
         try {
             await dbClient.query(
-                `UPDATE call_logs 
-                 SET voicemail_text = $1 
+                `UPDATE call_logs
+                 SET voicemail_text = $1
                  WHERE call_sid = $2`,
                 [TranscriptionText, CallSid]
             );
@@ -1232,15 +1212,13 @@ app.post('/api/twilio/voicemail-transcription', async (req, res) => {
     res.status(200).send('OK');
 });
 
-const { Readable } = require('stream'); // Ensure this is imported or available
-
 app.get('/api/voicemail/stream', async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).send('Recording URL is required');
 
     try {
         const credentials = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
-        
+
         const response = await fetch(url, {
             headers: {
                 'Authorization': `Basic ${credentials}`
@@ -1253,8 +1231,7 @@ app.get('/api/voicemail/stream', async (req, res) => {
         }
 
         res.setHeader('Content-Type', 'audio/mpeg');
-        
-        // Convert web stream to Node.js stream safely
+
         const nodeStream = Readable.fromWeb(response.body);
         nodeStream.pipe(res);
     } catch (err) {
@@ -1272,14 +1249,13 @@ app.get('/api/call-logs/:userId', async (req, res) => {
 
     try {
         let query = `
-            SELECT call_sid, from_number, to_number, call_status, direction, line_type, carrier, risk_label, voicemail_url, voicemail_text, created_at 
-            FROM call_logs 
+            SELECT call_sid, from_number, to_number, call_status, direction, line_type, carrier, risk_label, voicemail_url, voicemail_text, created_at
+            FROM call_logs
             WHERE user_id = $1
         `;
-        
+
         let queryParams = [userId];
 
-        // If a date range is provided from the app (Today, Last 7 Days, Last 30 Days)
         if (startDate && endDate) {
             query += ` AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`;
             queryParams.push(startDate, endDate);
@@ -1289,25 +1265,17 @@ app.get('/api/call-logs/:userId', async (req, res) => {
 
         const result = await pool.query(query, queryParams);
         res.json({ success: true, callLogs: result.rows });
-
     } catch (err) {
         console.error('Error fetching call logs:', err);
         res.status(500).json({ success: false, error: 'Server error fetching call logs.' });
     }
 });
 
-
 // ----------------------------------------------------
 // Crons Schedule
 // ----------------------------------------------------
-
-// Service imports needed by crons (place before the grouped crons)
 const { fetchAndStoreTwilioCalls } = require('./services/twilioStatsService');
 const { fetchAndStoreStrideStats } = require('./services/strideService');
-
-// ----------------------------------------------------
-// All Scheduled Cron Jobs
-// ----------------------------------------------------
 
 // 1. Hourly Guardian Daily Report Sweep (Runs at :00 every hour)
 cron.schedule('0 * * * *', async () => {
@@ -1438,8 +1406,8 @@ app.post('/api/user/settings', async (req, res) => {
         const upsertQuery = `
             INSERT INTO user_settings (user_id, report_time, is_call_shield_enabled, message_name, updated_at)
             VALUES ($1, COALESCE($2, '20:00'), COALESCE($3, true), $4, NOW())
-            ON CONFLICT (user_id) 
-            DO UPDATE SET 
+            ON CONFLICT (user_id)
+            DO UPDATE SET
                 report_time = COALESCE(EXCLUDED.report_time, user_settings.report_time),
                 is_call_shield_enabled = COALESCE(EXCLUDED.is_call_shield_enabled, user_settings.is_call_shield_enabled),
                 message_name = COALESCE(EXCLUDED.message_name, user_settings.message_name),
@@ -1460,7 +1428,7 @@ app.post('/api/user/settings', async (req, res) => {
 app.get('/api/admin/regional-hubs-stats', authenticateToken, async (req, res) => {
     try {
         const query = `
-            SELECT 
+            SELECT
                 h.id AS hub_id,
                 h.hub_code,
                 h.hub_name,
@@ -1482,14 +1450,11 @@ app.get('/api/admin/regional-hubs-stats', authenticateToken, async (req, res) =>
     }
 });
 
-
-// Example route for provisioning a regional hub number
 async function provisionHubNumber(req, res) {
     try {
         const { areaCode, hubId } = req.body;
 
-        // 1. Search for an available phone number in the requested area code
-        const availableNumbers = await client.availablePhoneNumbers('US')
+        const availableNumbers = await twilioClient.availablePhoneNumbers('US')
             .local
             .list({ areaCode: areaCode, limit: 1 });
 
@@ -1499,20 +1464,19 @@ async function provisionHubNumber(req, res) {
 
         const targetNumber = availableNumbers[0].phoneNumber;
 
-        // 2. Purchase the number AND automatically configure its webhook URLs
-        const purchasedNumber = await client.incomingPhoneNumbers.create({
+        const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({
             phoneNumber: targetNumber,
-            // Automatically points incoming calls to your Render backend voice handler
             voiceUrl: 'https://mobilecallshield-backend.onrender.com/api/twilio/voice',
             voiceMethod: 'POST',
-            // Optional: status callback for tracking call lifecycle events
             statusCallback: 'https://mobilecallshield-backend.onrender.com/api/twilio/call-status',
             statusCallbackMethod: 'POST'
         });
 
-        // 3. Save the provisioned number and its details into your PostgreSQL database
-        // const query = 'INSERT INTO regional_hub_numbers (hub_id, phone_number, sid) VALUES ($1, $2, $3)';
-        // await db.query(query, [hubId, purchasedNumber.phoneNumber, purchasedNumber.sid]);
+        await pool.query(
+            `INSERT INTO twilio_numbers (phone_number, twilio_sid, hub_id, user_id, status, is_active)
+             VALUES ($1, $2, $3, NULL, 'unassigned', true)`,
+            [purchasedNumber.phoneNumber, purchasedNumber.sid, hubId]
+        );
 
         return res.status(200).json({
             success: true,
@@ -1520,13 +1484,11 @@ async function provisionHubNumber(req, res) {
             sid: purchasedNumber.sid,
             message: "Number provisioned and webhooks configured successfully!"
         });
-
     } catch (error) {
         console.error("Error provisioning Twilio number:", error);
         return res.status(500).json({ error: error.message });
     }
 }
-
 
 app.post('/api/admin/provision-hub-numbers', async (req, res) => {
     let { hubId, count = 1 } = req.body;
@@ -1580,34 +1542,28 @@ app.post('/api/admin/provision-hub-numbers', async (req, res) => {
             message: `Successfully provisioned ${addedCount} numbers to hub!`,
             numbers: newlyAdded
         });
-
     } catch (err) {
         console.error('❌ Error provisioning hub numbers:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-
 // ----------------------------------------------------
 // Messaging
 // ----------------------------------------------------
-
 app.post('/api/webhook/sms', async (req, res) => {
     try {
         const { from, to, text } = req.body;
         console.log(`📩 Incoming text from ${from} to ${to}: "${text}"`);
 
-        // Check for common sales/political trigger words or spam patterns
         const spamKeywords = ['vote', 'elect', 'campaign', 'sale', 'offer', 'discount', 'deal expires'];
         const isSpam = spamKeywords.some(keyword => text.toLowerCase().includes(keyword));
 
         if (isSpam) {
             console.log(`🛑 Blocked spam text from ${from}`);
-            // Optionally reply with an automatic STOP or drop it entirely
             return res.status(200).json({ status: 'blocked' });
         }
 
-        // If it's a legitimate text, you could forward a notification or store it
         res.status(200).json({ status: 'received' });
     } catch (err) {
         console.error('Error handling SMS webhook:', err);
@@ -1618,44 +1574,37 @@ app.post('/api/webhook/sms', async (req, res) => {
 // ==========================================
 // Twilio Call Stats Services & Routes
 // ==========================================
-
-// Endpoint to view or trigger weekly Twilio stats
 app.get('/api/twilio/stats', async (req, res) => {
-  const { phone } = req.query;
-  if (!phone) {
-    return res.status(400).json({ error: 'phone query parameter is required' });
-  }
+    const { phone } = req.query;
+    if (!phone) {
+        return res.status(400).json({ error: 'phone query parameter is required' });
+    }
 
-  try {
-    await fetchAndStoreTwilioCalls(50);
-    const stats = await getWeeklyStatsPerNumber(phone);
-    res.json({ phoneNumber: phone, weeklyStats: stats });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to retrieve stats' });
-  }
+    try {
+        await fetchAndStoreTwilioCalls(50);
+        const stats = await getWeeklyStatsPerNumber(phone);
+        res.json({ phoneNumber: phone, weeklyStats: stats });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to retrieve stats' });
+    }
 });
 
 // ==========================================
 // Stride Call Stats Services & Routes
 // ==========================================
-
-
-// Endpoint to view aggregated Stride stats alongside your receivables/costs workflow
 app.get('/api/stride/stats', async (req, res) => {
-  try {
-    await fetchAndStoreStrideStats();
-    const stats = await getStrideStatsSummary();
-    res.json({ success: true, strideStats: stats });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Failed to retrieve stride stats' });
-  }
+    try {
+        await fetchAndStoreStrideStats();
+        const stats = await getStrideStatsSummary();
+        res.json({ success: true, strideStats: stats });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to retrieve stride stats' });
+    }
 });
 
 // ==========================================
 // Guardian - Protected Dashboard & Settings
 // ==========================================
-
-// GET protected dependents (seniors) for a logged-in guardian
 app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
     const { guardianUserId } = req.params;
     const parsedUserId = parseInt(guardianUserId, 10);
@@ -1666,10 +1615,10 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
 
     try {
         const query = `
-            SELECT 
-                u.id, 
-                u.user_name AS name, 
-                u.owner_phone AS phone_number, 
+            SELECT
+                u.id,
+                u.user_name AS name,
+                u.owner_phone AS phone_number,
                 COALESCE(u.is_call_shield_enabled, true) AS is_protected
             FROM account_guardians ag
             JOIN users u ON ag.dependent_user_id = u.id
@@ -1688,7 +1637,6 @@ app.get('/api/guardians/dependents/:guardianUserId', async (req, res) => {
     }
 });
 
-// Helper function to fetch or seed default global guardian settings
 async function getGuardianSettings(userId) {
     let res = await pool.query(
         'SELECT * FROM guardian_settings WHERE user_id = $1',
@@ -1697,7 +1645,7 @@ async function getGuardianSettings(userId) {
 
     if (res.rows.length === 0) {
         res = await pool.query(
-            `INSERT INTO guardian_settings 
+            `INSERT INTO guardian_settings
                 (user_id, threat_feed_enabled, remote_shield_enabled, emergency_actions_enabled, check_ins_enabled)
              VALUES ($1, true, true, true, false)
              RETURNING *`,
@@ -1707,48 +1655,43 @@ async function getGuardianSettings(userId) {
     return res.rows[0];
 }
 
-
-// Add or update a trusted contact and sync guardian portal access
 app.post('/api/guardians/contacts', async (req, res) => {
     const { userId, name, phoneNumber, relationship, isPrimary, isGuardian, guardianUserId } = req.body;
-    
+
     try {
-        // 1. Insert or update the entry in trusted_contacts (local call-screening whitelist)
         const contactQuery = `
             INSERT INTO trusted_contacts (user_id, name, phone_number, relationship, is_primary, is_guardian, guardian_user_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, name, phone_number, relationship, is_primary, is_guardian, guardian_user_id;
         `;
-        
+
         const contactValues = [
-            userId, 
-            name, 
-            phoneNumber, 
-            relationship || 'Guardian', 
-            isPrimary || false, 
+            userId,
+            name,
+            phoneNumber,
+            relationship || 'Guardian',
+            isPrimary || false,
             isGuardian !== undefined ? isGuardian : true,
-            guardianUserId || null 
+            guardianUserId || null
         ];
-        
+
         const contactResult = await pool.query(contactQuery, contactValues);
         const savedContact = contactResult.rows[0];
 
-        // 2. If designated as an active guardian with a valid user system account, upsert account_guardians
         if (isGuardian && guardianUserId) {
             const guardianLinkQuery = `
                 INSERT INTO account_guardians (guardian_user_id, dependent_user_id, is_active, created_at)
                 VALUES ($1, $2, TRUE, NOW())
-                ON CONFLICT (guardian_user_id, dependent_user_id) 
+                ON CONFLICT (guardian_user_id, dependent_user_id)
                 DO UPDATE SET is_active = TRUE;
             `;
-            // Note: guardianUserId is the caretaker, userId is the senior (dependent)
             await pool.query(guardianLinkQuery, [guardianUserId, userId]);
             console.log(`🟢 Synced account_guardians link: Guardian ID ${guardianUserId} -> Dependent ID ${userId}`);
         }
 
-        res.status(201).json({ 
-            success: true, 
-            contact: savedContact 
+        res.status(201).json({
+            success: true,
+            contact: savedContact
         });
     } catch (err) {
         console.error("❌ Error adding guardian contact & syncing portal:", err);
@@ -1756,7 +1699,6 @@ app.post('/api/guardians/contacts', async (req, res) => {
     }
 });
 
-// GET /api/guardians/settings/:userId
 app.get('/api/guardians/settings/:userId', async (req, res) => {
     try {
         const userId = parseInt(req.params.userId, 10);
@@ -1778,14 +1720,13 @@ app.get('/api/guardians/settings/:userId', async (req, res) => {
     }
 });
 
-// PUT /api/guardians/settings/:userId
 app.put('/api/guardians/settings/:userId', async (req, res) => {
     try {
         const userId = parseInt(req.params.userId, 10);
         const { threatFeedEnabled, remoteShieldEnabled, emergencyActionsEnabled, checkInsEnabled } = req.body;
 
         const query = `
-            INSERT INTO guardian_settings 
+            INSERT INTO guardian_settings
                 (user_id, threat_feed_enabled, remote_shield_enabled, emergency_actions_enabled, check_ins_enabled, updated_at)
             VALUES ($1, $2, $3, $4, $5, NOW())
             ON CONFLICT (user_id) DO UPDATE SET
@@ -1825,7 +1766,6 @@ app.put('/api/guardians/settings/:userId', async (req, res) => {
     }
 });
 
-// Get call logs and threat history for a protectee
 app.get('/api/guardians/call-logs/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -1844,7 +1784,6 @@ app.get('/api/guardians/call-logs/:userId', async (req, res) => {
     }
 });
 
-// Post a new call log entry (uploaded from protected device)
 app.post('/api/guardians/call-logs', async (req, res) => {
     try {
         const { userId, callerNumber, callerName, callType, riskLevel, audioUrl, isBlocked } = req.body;
@@ -1861,29 +1800,26 @@ app.post('/api/guardians/call-logs', async (req, res) => {
     }
 });
 
-// Insert reporting from Guardian Settings to guardian_report_settings table
 app.put('/api/guardians/report-settings', async (req, res) => {
     let { ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms, sendViaEmail, reportTime } = req.body;
 
     try {
-        // 1. Verify if guardianId exists in users table
         const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [guardianId]);
         if (userCheck.rows.length === 0) {
-            // 2. Fallback check using owner_phone since that matches your schema
             const phoneMatch = await pool.query('SELECT id FROM users WHERE owner_phone = $1', [guardianPhone]);
             if (phoneMatch.rows.length > 0) {
-                guardianId = phoneMatch.rows[0].id; // Remap to the actual valid user ID
+                guardianId = phoneMatch.rows[0].id;
             } else {
                 return res.status(400).json({ success: false, error: "Guardian ID does not exist in users table." });
             }
         }
 
         const query = `
-            INSERT INTO guardian_report_settings 
+            INSERT INTO guardian_report_settings
                 (owner_id, guardian_id, guardian_phone, guardian_email, send_via_sms, send_via_email, report_time)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (guardian_id) 
-            DO UPDATE SET 
+            ON CONFLICT (guardian_id)
+            DO UPDATE SET
                 guardian_phone = EXCLUDED.guardian_phone,
                 guardian_email = EXCLUDED.guardian_email,
                 send_via_sms = EXCLUDED.send_via_sms,
@@ -1891,7 +1827,7 @@ app.put('/api/guardians/report-settings', async (req, res) => {
                 report_time = EXCLUDED.report_time
             RETURNING *;
         `;
-        
+
         const values = [ownerId, guardianId, guardianPhone, guardianEmail, sendViaSms ?? true, sendViaEmail ?? false, reportTime];
         const result = await pool.query(query, values);
 
@@ -1905,7 +1841,6 @@ app.put('/api/guardians/report-settings', async (req, res) => {
 // ==========================================
 // Dynamic Tables for app sections (Display and reporting)
 // ==========================================
-
 app.get('/api/system/menu-tree', async (req, res) => {
     try {
         const query = `
@@ -1926,7 +1861,7 @@ app.get('/api/system/menu-tree', async (req, res) => {
             WHERE sf.is_active = true AND pf.is_enabled = true
             ORDER BY sf.feature_id, pf.sort_order, pf.sub_sort_order;
         `;
-       
+
         const result = await pool.query(query);
         res.json({ success: true, menuTree: result.rows });
     } catch (err) {
@@ -1935,11 +1870,8 @@ app.get('/api/system/menu-tree', async (req, res) => {
     }
 });
 
-// Get the features for Guardian Portal
-
 app.get('/api/guardians/features/:id', async (req, res) => {
     try {
-        const dependentId = req.params.id;
         const query = `
             SELECT
                 pf.id,
@@ -1963,10 +1895,8 @@ app.get('/api/guardians/features/:id', async (req, res) => {
     }
 });
 
-// Put the features for Guardian Portal
 app.put('/api/guardians/features/:id', async (req, res) => {
     try {
-        const dependentId = req.params.id;
         const { featureId, isEnabled } = req.body;
 
         if (!featureId || isEnabled === undefined) {
@@ -1979,7 +1909,7 @@ app.put('/api/guardians/features/:id', async (req, res) => {
             WHERE id = $2
             RETURNING id, feature_name, is_enabled;
         `;
-       
+
         const result = await pool.query(query, [isEnabled, featureId]);
 
         if (result.rows.length === 0) {
@@ -1996,26 +1926,24 @@ app.put('/api/guardians/features/:id', async (req, res) => {
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
-// Get the features for Main Dashboard
 
 app.get('/api/dashboard/features/:id', async (req, res) => {
     try {
-        const dependentId = req.params.id;
         const query = `
             SELECT
-    pf.id,
-    pf.feature_name,
-    pf.description,
-    pf.is_enabled,
-    pf.sort_order,
-    pf.sub_sort_order
-FROM portal_features pf
-JOIN system_features sf ON pf.feature_id = sf.feature_id
-WHERE sf.is_active = true
-  AND pf.is_enabled = true
-  AND sf.function_type = 'MainDashboard'
-  AND pf.child_id IS NULL
-ORDER BY pf.sort_order ASC, pf.sub_sort_order ASC;
+                pf.id,
+                pf.feature_name,
+                pf.description,
+                pf.is_enabled,
+                pf.sort_order,
+                pf.sub_sort_order
+            FROM portal_features pf
+            JOIN system_features sf ON pf.feature_id = sf.feature_id
+            WHERE sf.is_active = true
+              AND pf.is_enabled = true
+              AND sf.function_type = 'MainDashboard'
+              AND pf.child_id IS NULL
+            ORDER BY pf.sort_order ASC, pf.sub_sort_order ASC;
         `;
         const result = await pool.query(query);
         res.json({ success: true, guardianFeatures: result.rows });
@@ -2028,8 +1956,6 @@ ORDER BY pf.sort_order ASC, pf.sub_sort_order ASC;
 // ==========================================
 // TEMPORARY QUIET / VACATION PAUSE ENDPOINTS
 // ==========================================
-
-// Helper function to calculate next 8:00 AM Central Time
 function getNext8AmCentralDate(now = new Date()) {
     const formatter = new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/Chicago',
@@ -2071,7 +1997,6 @@ function getNext8AmCentralDate(now = new Date()) {
     return new Date(`${year}-${mm}-${dd}T08:00:00${offset}`);
 }
 
-// Resume primary shield protection
 app.post('/api/user/resume-shield', async (req, res) => {
     const { userId, resumedByUserId } = req.body;
     const parsedUserId = parseInt(userId, 10);
@@ -2081,7 +2006,6 @@ app.post('/api/user/resume-shield', async (req, res) => {
     }
 
     try {
-        // If initiated remotely by a guardian, verify guardian-dependent relationship
         if (resumedByUserId) {
             const parsedGuardianId = parseInt(resumedByUserId, 10);
             if (isNaN(parsedGuardianId)) {
@@ -2089,9 +2013,9 @@ app.post('/api/user/resume-shield', async (req, res) => {
             }
 
             const linkCheck = await pool.query(
-                `SELECT id 
-                 FROM account_guardians 
-                 WHERE dependent_user_id = $1 
+                `SELECT id
+                 FROM account_guardians
+                 WHERE dependent_user_id = $1
                    AND guardian_user_id = $2
                  LIMIT 1`,
                 [parsedUserId, parsedGuardianId]
@@ -2105,7 +2029,6 @@ app.post('/api/user/resume-shield', async (req, res) => {
             }
         }
 
-        // Clear pause status for the targeted dependent
         const result = await pool.query(
             `UPDATE users
              SET pause_mode = NULL, pause_until = NULL
@@ -2130,7 +2053,7 @@ app.post('/api/user/resume-shield', async (req, res) => {
         return res.status(500).json({ success: false, error: error.message });
     }
 });
-// 1. SET PAUSE MODE
+
 app.post('/api/user/pause-shield', async (req, res) => {
     const { userId, mode, durationHours, untilTomorrowMorning, vacationDays, endDate } = req.body;
     const parsedUserId = parseInt(userId, 10);
@@ -2192,30 +2115,6 @@ app.post('/api/user/pause-shield', async (req, res) => {
     }
 });
 
-// 2. RESUME PROTECTION NOW
-app.post('/api/user/resume-shield', async (req, res) => {
-    const { userId } = req.body;
-    const parsedUserId = parseInt(userId, 10);
-
-    if (isNaN(parsedUserId)) {
-        return res.status(400).json({ success: false, error: 'Invalid userId' });
-    }
-
-    try {
-        await pool.query(
-            `UPDATE users
-             SET pause_mode = NULL, pause_until = NULL
-             WHERE id = $1`,
-            [parsedUserId]
-        );
-        return res.json({ success: true, pauseMode: null, pauseUntil: null });
-    } catch (error) {
-        console.error('Error resuming shield:', error);
-        return res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// 3. READ PAUSE STATUS
 app.get('/api/user/pause-status/:userId', async (req, res) => {
     const parsedUserId = parseInt(req.params.userId, 10);
 
