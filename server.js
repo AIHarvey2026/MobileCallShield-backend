@@ -304,16 +304,42 @@ app.get('/api/admin/check-number-inventory', async (req, res) => {
 // ----------------------------------------------------
 
 app.post('/api/auth/register', authLimiter, async (req, res) => {
-    const { name, phoneNumber, email, password, pin, passcode, messageName, securityQuestion, securityAnswer } = req.body;
-    if (!password || !email || !pin) {
-        return res.status(400).json({ error: 'Email, password, and PIN are required.' });
+    const {
+        name,
+        phoneNumber,
+        email,
+        password,
+        pin,
+        passcode,
+        messageName,
+        securityQuestion,
+        securityAnswer,
+        accountType
+    } = req.body;
+
+    // 1. Strict Validation for Required Fields
+    if (!password || !email || !pin || !accountType) {
+        return res.status(400).json({
+            error: 'Email, password, PIN, and accountType (protectee, guardian, or solo) are required.'
+        });
+    }
+
+    const allowedAccountTypes = ['protectee', 'guardian', 'solo'];
+    const normalizedAccountType = String(accountType).trim().toLowerCase();
+
+    if (!allowedAccountTypes.includes(normalizedAccountType)) {
+        return res.status(400).json({
+            error: "Invalid accountType. Must be 'protectee', 'guardian', or 'solo'."
+        });
     }
 
     const realPhone = (phoneNumber && phoneNumber !== '+10000000000') ? phoneNumber : null;
     const client = await pool.connect();
+
     try {
         await client.query('BEGIN');
 
+        // Sanitize greeting name if provided
         let sanitizedMessageName = null;
         try {
             sanitizedMessageName = sanitizeAndValidateMessageName(messageName);
@@ -322,6 +348,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             return res.status(400).json({ error: validationErr.message });
         }
 
+        // 2. Duplicate Account Check (Owner Phone or Email)
         const existingUser = await client.query(
             'SELECT id FROM users WHERE ($1::text IS NOT NULL AND owner_phone = $1) OR email = $2',
             [realPhone, email]
@@ -346,8 +373,13 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + 14);
 
+        // 3. Insert New User
         const newUser = await client.query(
-            `INSERT INTO users (user_name, owner_phone, email, password, pin, passcode, message_name, security_question, security_answer, subscription_status, trial_ends_at, created_at)
+            `INSERT INTO users (
+                user_name, owner_phone, email, password, pin, passcode, 
+                message_name, security_question, security_answer, 
+                subscription_status, trial_ends_at, created_at
+             )
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'trialing', $10, NOW())
              RETURNING id, user_name, owner_phone, email, passcode, message_name, security_question, subscription_status`,
             [name || email, realPhone, email, passwordHash, pin, userPasscode, sanitizedMessageName, finalQuestion, finalAnswer, trialEnd]
@@ -355,7 +387,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
         const newUserId = newUser.rows[0].id;
 
-        // Regional Hub Phone Number Assignment Logic
+        // 4. Regional Hub Phone Number Assignment Logic
         let assignedPhoneNumber = null;
         let phoneRow = null;
 
@@ -403,8 +435,23 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             );
         }
 
+        // 5. Audit Logging for Account Registration
+        if (typeof logAuditEvent === 'function') {
+            await logAuditEvent(client, {
+                dependentUserId: newUserId,
+                performedByUserId: newUserId,
+                role: normalizedAccountType === 'protectee' ? 'protectee' : normalizedAccountType,
+                actionType: 'ACCOUNT_REGISTERED',
+                changes: {
+                    accountType: normalizedAccountType,
+                    assignedTwilioNumber: assignedPhoneNumber
+                }
+            });
+        }
+
         await client.query('COMMIT');
 
+        // 6. Return Success Response & Auth Token
         res.status(201).json({
             success: true,
             message: 'User registered successfully!',
@@ -416,6 +463,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
                 assignedTwilioNumber: assignedPhoneNumber,
                 twilio_screening_number: assignedPhoneNumber,
                 email: newUser.rows[0].email,
+                accountType: normalizedAccountType,
                 passcode: newUser.rows[0].passcode,
                 messageName: newUser.rows[0].message_name,
                 securityQuestion: newUser.rows[0].security_question,
@@ -431,6 +479,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     }
 });
 
+//Login
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -548,10 +597,12 @@ app.post('/api/user/update-message-name', async (req, res) => {
     }
 });
 
+//Deactivate user (No Primary Guardian, user pin, Primary Guardian (primary Guardian pin))
+
 app.post('/api/user/deactivate', async (req, res) => {
     const { userId, guardianPin, actorUserId } = req.body;
     const targetUserId = parseInt(userId, 10);
-    const effectiveActorId = actorUserId || req.user?.id || targetUserId;
+    const effectiveActorId = parseInt(actorUserId || req.user?.id || targetUserId, 10);
 
     if (!targetUserId || isNaN(targetUserId)) {
         return res.status(400).json({ error: 'Missing userId' });
@@ -559,23 +610,64 @@ app.post('/api/user/deactivate', async (req, res) => {
 
     const dbClient = await pool.connect();
     try {
-        const userResult = await dbClient.query('SELECT * FROM users WHERE id = $1', [targetUserId]);
+        const userResult = await dbClient.query(
+            `SELECT u.*,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_guardians ag
+                        WHERE ag.dependent_user_id = u.id
+                          AND ag.is_active = true
+                          AND ag.permission_level = 'primary'
+                    ) AS has_primary_guardian_row
+             FROM users u
+             WHERE u.id = $1`,
+            [targetUserId]
+        );
+
         if (userResult.rows.length === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
 
         const user = userResult.rows[0];
+        const hasPrimaryGuardian = Boolean(
+            user.primary_guardian_id || user.has_primary_guardian_row
+        );
         const actor = await resolveActorRole(dbClient, targetUserId, effectiveActorId);
 
-        if (user.primary_guardian_id) {
+        if (hasPrimaryGuardian) {
+            if (!actor.isPrimary) {
+                await logAuditEvent(dbClient, {
+                    dependentUserId: targetUserId,
+                    performedByUserId: effectiveActorId,
+                    role: actor.role,
+                    actionType: 'DENIED_DEACTIVATE_ACCOUNT',
+                    changes: {
+                        hasPrimaryGuardian: true,
+                        reason: 'Only Primary Guardian can deactivate account when one is assigned'
+                    }
+                });
+                return res.status(403).json({
+                    success: false,
+                    error: 'Only the Primary Guardian can deactivate this account.'
+                });
+            }
+
+            const primaryId = user.primary_guardian_id || effectiveActorId;
+            const guardianUserRes = await dbClient.query(
+                `SELECT pin, guardian_code FROM users WHERE id = $1`,
+                [primaryId]
+            );
+            const expectedPin =
+                guardianUserRes.rows[0]?.guardian_code ||
+                guardianUserRes.rows[0]?.pin ||
+                user.guardian_code ||
+                user.pin;
+
             if (!guardianPin) {
                 return res.status(401).json({ error: 'Primary Guardian PIN required' });
             }
-            const guardianResult = await dbClient.query(
-                'SELECT * FROM guardians WHERE id = $1 AND pin = $2',
-                [user.primary_guardian_id, guardianPin]
-            );
-            if (guardianResult.rows.length === 0) {
+
+            if (expectedPin && String(guardianPin).trim() !== String(expectedPin).trim()) {
                 await logAuditEvent(dbClient, {
                     dependentUserId: targetUserId,
                     performedByUserId: effectiveActorId,
@@ -585,6 +677,18 @@ app.post('/api/user/deactivate', async (req, res) => {
                 });
                 return res.status(401).json({ error: 'Incorrect Guardian PIN' });
             }
+        } else {
+            const ownerPin = user.guardian_code || user.pin;
+            if (guardianPin && ownerPin && String(guardianPin).trim() !== String(ownerPin).trim()) {
+                await logAuditEvent(dbClient, {
+                    dependentUserId: targetUserId,
+                    performedByUserId: effectiveActorId,
+                    role: actor.role,
+                    actionType: 'DENIED_DEACTIVATE_ACCOUNT',
+                    changes: { reason: 'Incorrect PIN' }
+                });
+                return res.status(401).json({ error: 'Incorrect PIN' });
+            }
         }
 
         await dbClient.query('UPDATE users SET is_active = false WHERE id = $1', [targetUserId]);
@@ -592,9 +696,9 @@ app.post('/api/user/deactivate', async (req, res) => {
         await logAuditEvent(dbClient, {
             dependentUserId: targetUserId,
             performedByUserId: effectiveActorId,
-            role: actor.role === 'system' ? 'primary_guardian' : actor.role,
+            role: hasPrimaryGuardian ? 'primary_guardian' : actor.role,
             actionType: 'DEACTIVATE_ACCOUNT',
-            changes: { isActive: false }
+            changes: { isActive: false, hasPrimaryGuardian }
         });
 
         res.json({
@@ -608,7 +712,6 @@ app.post('/api/user/deactivate', async (req, res) => {
         dbClient.release();
     }
 });
-
 app.put('/api/user/toggle-shield', async (req, res) => {
     const { userId, isEnabled, pin, actorUserId } = req.body;
     const targetUserId = parseInt(userId, 10);
@@ -621,33 +724,58 @@ app.put('/api/user/toggle-shield', async (req, res) => {
     const dbClient = await pool.connect();
     try {
         const userResult = await dbClient.query(
-            'SELECT pin, guardian_code, is_call_shield_enabled FROM users WHERE id = $1',
+            `SELECT u.pin,
+                    u.guardian_code,
+                    u.is_call_shield_enabled,
+                    u.primary_guardian_id,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_guardians ag
+                        WHERE ag.dependent_user_id = u.id
+                          AND ag.is_active = true
+                          AND ag.permission_level = 'primary'
+                    ) AS has_primary_guardian_row
+             FROM users u
+             WHERE u.id = $1`,
             [targetUserId]
         );
+
         if (userResult.rows.length === 0) {
             return res.status(404).json({ error: 'User not found.' });
         }
 
+        const userRow = userResult.rows[0];
+        const hasPrimaryGuardian = Boolean(
+            userRow.primary_guardian_id || userRow.has_primary_guardian_row
+        );
+
         const actor = await resolveActorRole(dbClient, targetUserId, effectiveActorId);
-        const canDisableShield = actor.role === 'protectee' || actor.isPrimary;
 
-        if (isEnabled === false && !canDisableShield) {
-            await logAuditEvent(dbClient, {
-                dependentUserId: targetUserId,
-                performedByUserId: effectiveActorId,
-                role: actor.role,
-                actionType: 'DENIED_TOGGLE_SHIELD',
-                changes: { requestedEnabled: false, reason: 'Only primary guardian or account owner can disable shield' }
-            });
-            return res.status(403).json({
-                success: false,
-                error: 'Only the Primary Guardian can turn off Call Shield.'
-            });
-        }
+        if (isEnabled === false) {
+            // If a primary guardian is assigned, only the primary guardian can turn off Call Shield
+            if (hasPrimaryGuardian && !actor.isPrimary) {
+                await logAuditEvent(dbClient, {
+                    dependentUserId: targetUserId,
+                    performedByUserId: effectiveActorId,
+                    role: actor.role,
+                    actionType: 'DENIED_TOGGLE_SHIELD',
+                    changes: {
+                        requestedEnabled: false,
+                        hasPrimaryGuardian: true,
+                        reason: 'Primary guardian required to turn off Call Shield'
+                    }
+                });
+                return res.status(403).json({
+                    success: false,
+                    error: 'Primary Guardian is required to turn off Call Shield.'
+                });
+            }
 
-        const dbPin = userResult.rows[0].guardian_code || userResult.rows[0].pin || '1234';
-        if (!isEnabled && pin && pin !== dbPin) {
-            return res.status(401).json({ success: false, error: 'Incorrect Guardian/Owner PIN.' });
+            // If no primary guardian is assigned (or when a PIN is provided), validate PIN
+            const dbPin = userRow.guardian_code || userRow.pin || '1234';
+            if (pin && String(pin).trim() !== String(dbPin).trim()) {
+                return res.status(401).json({ success: false, error: 'Incorrect PIN.' });
+            }
         }
 
         await dbClient.query(
@@ -661,8 +789,9 @@ app.put('/api/user/toggle-shield', async (req, res) => {
             role: actor.role,
             actionType: isEnabled ? 'ENABLE_SHIELD' : 'DISABLE_SHIELD',
             changes: {
-                previousEnabled: userResult.rows[0].is_call_shield_enabled,
-                isCallShieldEnabled: Boolean(isEnabled)
+                previousEnabled: userRow.is_call_shield_enabled,
+                isCallShieldEnabled: Boolean(isEnabled),
+                hasPrimaryGuardian
             }
         });
 
@@ -1174,8 +1303,8 @@ app.post('/api/settings/update-passcode', async (req, res) => {
     const targetUserId = parseInt(userId, 10);
     const effectiveActorId = parseInt(actorUserId || req.user?.id || targetUserId, 10);
 
-    if (!targetUserId || isNaN(targetUserId) || !pin || !currentPasscode || !newPasscode) {
-        return res.status(400).json({ success: false, error: 'User ID, PIN, current passcode, and new passcode are required.' });
+    if (!targetUserId || isNaN(targetUserId) || !pin || !newPasscode) {
+        return res.status(400).json({ success: false, error: 'User ID, PIN, and new passcode are required.' });
     }
 
     const dbClient = await pool.connect();
@@ -1210,7 +1339,11 @@ app.post('/api/settings/update-passcode', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Incorrect Owner PIN.' });
         }
 
-        if (String(user.passcode).trim().toLowerCase() !== String(currentPasscode).trim().toLowerCase()) {
+        if (
+            currentPasscode &&
+            String(currentPasscode).trim().length > 0 &&
+            String(user.passcode).trim().toLowerCase() !== String(currentPasscode).trim().toLowerCase()
+        ) {
             return res.status(401).json({ success: false, error: 'Current passcode phrase does not match.' });
         }
 
@@ -1664,32 +1797,100 @@ app.get('/api/voicemail/stream', async (req, res) => {
 // ----------------------------------------------------
 app.get('/api/call-logs/:userId', async (req, res) => {
     const { userId } = req.params;
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, range, userIds, actorUserId, timeZone = 'America/Chicago' } = req.query;
 
+    const primaryUserId = parseInt(userId, 10);
+    const effectiveActorId = parseInt(actorUserId || req.user?.id || primaryUserId, 10);
+
+    if (!primaryUserId || isNaN(primaryUserId)) {
+        return res.status(400).json({ success: false, error: 'Valid userId is required.' });
+    }
+
+    let targetUserIds = [primaryUserId];
+    if (typeof userIds === 'string' && userIds.trim().length > 0) {
+        const parsed = userIds
+            .split(',')
+            .map((id) => parseInt(id.trim(), 10))
+            .filter((id) => !isNaN(id));
+        if (parsed.length > 0) {
+            targetUserIds = [...new Set(parsed)];
+        }
+    } else if (Array.isArray(userIds) && userIds.length > 0) {
+        const parsed = userIds
+            .map((id) => parseInt(id, 10))
+            .filter((id) => !isNaN(id));
+        if (parsed.length > 0) {
+            targetUserIds = [...new Set(parsed)];
+        }
+    }
+
+    const dbClient = await pool.connect();
     try {
-        let query = `
-            SELECT call_sid, from_number, to_number, call_status, direction, line_type, carrier, risk_label, voicemail_url, voicemail_text, created_at
-            FROM call_logs
-            WHERE user_id = $1
-        `;
-
-        let queryParams = [userId];
-
-        if (startDate && endDate) {
-            query += ` AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`;
-            queryParams.push(startDate, endDate);
+        for (const targetId of targetUserIds) {
+            const actor = await resolveActorRole(dbClient, targetId, effectiveActorId);
+            if (actor.role === 'unauthorized') {
+                return res.status(403).json({
+                    success: false,
+                    error: `Unauthorized to view call logs for user ID ${targetId}.`
+                });
+            }
         }
 
-        query += ` ORDER BY created_at DESC LIMIT 100`;
+        let query = `
+            SELECT cl.call_sid,
+                   cl.user_id,
+                   u.user_name AS account_owner_name,
+                   cl.from_number,
+                   cl.to_number,
+                   cl.call_status,
+                   cl.direction,
+                   cl.line_type,
+                   cl.carrier,
+                   cl.risk_label,
+                   cl.voicemail_url,
+                   cl.voicemail_text,
+                   cl.created_at
+            FROM call_logs cl
+            JOIN users u ON cl.user_id = u.id
+            WHERE cl.user_id = ANY($1::int[])
+        `;
 
-        const result = await pool.query(query, queryParams);
+        const queryParams = [targetUserIds];
+        let paramIndex = 2;
+
+        if (range === 'today') {
+            query += `
+                AND cl.created_at >= ((NOW() AT TIME ZONE $${paramIndex})::date::timestamp AT TIME ZONE $${paramIndex})
+                AND cl.created_at < (((NOW() AT TIME ZONE $${paramIndex})::date + INTERVAL '1 day')::timestamp AT TIME ZONE $${paramIndex})
+            `;
+            queryParams.push(timeZone);
+            paramIndex += 1;
+        } else if (range === '7d') {
+            query += ` AND cl.created_at >= NOW() - INTERVAL '7 days'`;
+        } else if (range === '30d') {
+            query += ` AND cl.created_at >= NOW() - INTERVAL '30 days'`;
+        } else if (startDate && endDate) {
+            query += `
+                AND cl.created_at >= ($${paramIndex}::date::timestamp AT TIME ZONE $${paramIndex + 2})
+                AND cl.created_at < (($${paramIndex + 1}::date + INTERVAL '1 day')::timestamp AT TIME ZONE $${paramIndex + 2})
+            `;
+            queryParams.push(startDate, endDate, timeZone);
+            paramIndex += 3;
+        }
+
+        query += ` ORDER BY cl.created_at DESC LIMIT 100`;
+
+        const result = await dbClient.query(query, queryParams);
         res.json({ success: true, callLogs: result.rows });
     } catch (err) {
         console.error('Error fetching call logs:', err);
         res.status(500).json({ success: false, error: 'Server error fetching call logs.' });
+    } finally {
+        dbClient.release();
     }
 });
 
+// Audit Logs
 app.get('/api/audit-logs/:dependentUserId', authenticateToken, async (req, res) => {
     const dependentUserId = parseInt(req.params.dependentUserId, 10);
     if (isNaN(dependentUserId)) {
@@ -1721,6 +1922,39 @@ app.get('/api/audit-logs/:dependentUserId', authenticateToken, async (req, res) 
         res.status(500).json({ success: false, error: 'Failed to fetch audit logs.' });
     }
 });
+
+// auditLogger.js
+async function writeAuditLog(pool, {
+  dependentUserId,
+  performedByUserId = null,
+  performedByRole = "owner",
+  actionType,
+  changes = {}
+}) {
+  if (!dependentUserId || !actionType) return;
+
+  await pool.query(
+    `
+      INSERT INTO audit_logs (
+        dependent_user_id,
+        performed_by_user_id,
+        performed_by_role,
+        action_type,
+        changes_json
+      )
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [
+      dependentUserId,
+      performedByUserId,
+      performedByRole,
+      actionType,
+      JSON.stringify(changes)
+    ]
+  );
+}
+
+module.exports = { writeAuditLog };
 
 // ----------------------------------------------------
 // Crons Schedule
@@ -2119,7 +2353,7 @@ app.post('/api/guardians/contacts', async (req, res) => {
     const dbClient = await pool.connect();
     try {
         const actor = await resolveActorRole(dbClient, targetUserId, effectiveActorId);
-        
+
         // Block co-guardians from adding new co-guardians or primary guardians
         if (isGuardian && actor.role === 'co_guardian') {
             await logAuditEvent(dbClient, {
@@ -2146,16 +2380,9 @@ app.post('/api/guardians/contacts', async (req, res) => {
         );
         const newContact = contactResult.rows[0];
 
-        // Audit log contact creation
-        await logAuditEvent(dbClient, {
-            dependentUserId: targetUserId,
-            performedByUserId: effectiveActorId,
-            role: actor.role,
-            actionType: isGuardian ? 'ADD_CO_GUARDIAN' : 'ADD_TRUSTED_CONTACT',
-            changes: { contactId: newContact.id, name, phone: normalizedPhone, isGuardian: Boolean(isGuardian) }
-        });
+        let effectiveIsPrimary = Boolean(isPrimary);
 
-        // Link co-guardian if flagged
+        // Link guardian if flagged and enforce that every guarded protectee has a primary guardian
         if (isGuardian) {
             const guardianUserRes = await dbClient.query(
                 `SELECT id FROM users WHERE phone_number = $1 OR owner_phone = $1 LIMIT 1`,
@@ -2163,17 +2390,49 @@ app.post('/api/guardians/contacts', async (req, res) => {
             );
             if (guardianUserRes.rowCount > 0) {
                 const guardianUserId = guardianUserRes.rows[0].id;
-                const permLevel = isPrimary ? 'primary' : 'standard';
+
+                const existingPrimaryRes = await dbClient.query(
+                    `SELECT u.primary_guardian_id,
+                            EXISTS (
+                                SELECT 1
+                                FROM account_guardians ag
+                                WHERE ag.dependent_user_id = $1
+                                  AND ag.is_active = true
+                                  AND ag.permission_level = 'primary'
+                            ) AS has_primary_row
+                     FROM users u
+                     WHERE u.id = $1`,
+                    [targetUserId]
+                );
+
+                const hasExistingPrimary = Boolean(
+                    existingPrimaryRes.rows[0]?.primary_guardian_id ||
+                    existingPrimaryRes.rows[0]?.has_primary_row
+                );
+
+                effectiveIsPrimary = Boolean(isPrimary) || !hasExistingPrimary;
+                const permLevel = effectiveIsPrimary ? 'primary' : 'standard';
+
+                if (effectiveIsPrimary) {
+                    await dbClient.query(
+                        `UPDATE account_guardians
+                         SET permission_level = 'standard'
+                         WHERE dependent_user_id = $1
+                           AND guardian_user_id != $2
+                           AND permission_level = 'primary'`,
+                        [targetUserId, guardianUserId]
+                    );
+                }
 
                 await dbClient.query(
                     `INSERT INTO account_guardians (dependent_user_id, guardian_user_id, permission_level, is_active)
                      VALUES ($1, $2, $3, true)
-                     ON CONFLICT (dependent_user_id, guardian_user_id) 
+                     ON CONFLICT (dependent_user_id, guardian_user_id)
                      DO UPDATE SET permission_level = EXCLUDED.permission_level, is_active = true`,
                     [targetUserId, guardianUserId, permLevel]
                 );
 
-                if (isPrimary) {
+                if (effectiveIsPrimary) {
                     await dbClient.query(
                         `UPDATE users SET primary_guardian_id = $1 WHERE id = $2`,
                         [guardianUserId, targetUserId]
@@ -2182,7 +2441,28 @@ app.post('/api/guardians/contacts', async (req, res) => {
             }
         }
 
-        return res.json({ success: true, contact: newContact });
+        // Audit log contact/guardian creation
+        await logAuditEvent(dbClient, {
+            dependentUserId: targetUserId,
+            performedByUserId: effectiveActorId,
+            role: actor.role,
+            actionType: isGuardian ? 'ADD_CO_GUARDIAN' : 'ADD_TRUSTED_CONTACT',
+            changes: {
+                contactId: newContact.id,
+                name,
+                phone: normalizedPhone,
+                isGuardian: Boolean(isGuardian),
+                isPrimary: effectiveIsPrimary
+            }
+        });
+
+        return res.json({
+            success: true,
+            contact: {
+                ...newContact,
+                is_primary: effectiveIsPrimary
+            }
+        });
     } catch (err) {
         console.error('Error creating contact/guardian:', err);
         return res.status(500).json({ success: false, error: 'Server error saving contact.' });
@@ -2190,6 +2470,8 @@ app.post('/api/guardians/contacts', async (req, res) => {
         dbClient.release();
     }
 });
+
+// Get Contact & Guardian Links
 app.get('/api/guardians/settings/:userId', async (req, res) => {
     try {
         const userId = parseInt(req.params.userId, 10);
