@@ -1005,6 +1005,41 @@ app.get('/api/user/profile', async (req, res) => {
 // ----------------------------------------------------
 // Guardian & Trusted Contacts Management
 // ----------------------------------------------------
+
+app.get('/api/guardians/my-guardians/:userId', async (req, res) => {
+    const dependentUserId = parseInt(req.params.userId, 10);
+    if (!dependentUserId || isNaN(dependentUserId)) {
+        return res.status(400).json({ success: false, error: 'Valid userId is required.' });
+    }
+
+    try {
+        const result = await pool.query(
+            `SELECT ag.id AS relationship_id,
+                    ag.guardian_user_id,
+                    u.user_name AS name,
+                    u.owner_phone AS phone_number,
+                    u.email,
+                    ag.permission_level,
+                    ag.created_at
+             FROM account_guardians ag
+             JOIN users u ON ag.guardian_user_id = u.id
+             WHERE ag.dependent_user_id = $1
+               AND ag.is_active = true
+             ORDER BY CASE WHEN ag.permission_level = 'primary' THEN 0 ELSE 1 END, ag.id ASC`,
+            [dependentUserId]
+        );
+
+        return res.json({
+            success: true,
+            guardians: result.rows
+        });
+    } catch (err) {
+        console.error('Error fetching guardians for protectee:', err);
+        return res.status(500).json({ success: false, error: 'Server error fetching guardians.' });
+    }
+});
+
+
 // Example: GET /api/guardians/my-protectees/:guardianUserId
 app.get('/api/guardians/my-protectees/:guardianUserId', async (req, res) => {
     const guardianUserId = parseInt(req.params.guardianUserId, 10);
