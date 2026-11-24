@@ -1099,6 +1099,203 @@ app.get('/api/trusted-contacts/:userId', async (req, res) => {
     }
 });
 
+
+// 1. Fetch trusted contacts for either the Owner (targetUserId === actorUserId)
+//    or a linked Protectee (actorUserId = guardianUserId, targetUserId = protecteeUserId)
+app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
+    const targetUserId = parseInt(req.params.targetUserId, 10);
+    const actorUserId = req.query.actorUserId
+        ? parseInt(req.query.actorUserId, 10)
+        : targetUserId;
+
+    if (Number.isNaN(targetUserId) || Number.isNaN(actorUserId)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid targetUserId or actorUserId'
+        });
+    }
+
+    try {
+        if (actorUserId !== targetUserId) {
+            const linkCheck = await db.query(
+                `SELECT permission_level
+                 FROM public.account_guardians
+                 WHERE guardian_user_id = $1 AND dependent_user_id = $2`,
+                [actorUserId, targetUserId]
+            );
+
+            if (linkCheck.rows.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Not authorized to view this protectee contact list'
+                });
+            }
+        }
+
+        const contactsResult = await db.query(
+            `SELECT id, user_id, name, phone_number, relationship, created_at
+             FROM public.trusted_contacts
+             WHERE user_id = $1
+             ORDER BY name ASC, id ASC`,
+            [targetUserId]
+        );
+
+        return res.json({
+            success: true,
+            targetUserId,
+            isProtecteeList: actorUserId !== targetUserId,
+            contacts: contactsResult.rows
+        });
+    } catch (err) {
+        console.error('Error fetching trusted contacts:', err);
+        return res.status(500).json({
+            success: false,
+            error: 'Database error loading trusted contacts'
+        });
+    }
+});
+
+// 2. Add a contact to a Protectee's trusted contacts list (Primary Guardian only)
+app.post('/api/guardians/contacts', async (req, res) => {
+    const { actorUserId, targetUserId, name, phoneNumber, relationship = null } = req.body;
+
+    if (!actorUserId || !targetUserId || !name?.trim() || !phoneNumber?.trim()) {
+        return res.status(400).json({
+            success: false,
+            error: 'actorUserId, targetUserId, name, and phoneNumber are required'
+        });
+    }
+
+    try {
+        const permCheck = await db.query(
+            `SELECT permission_level
+             FROM public.account_guardians
+             WHERE guardian_user_id = $1 AND dependent_user_id = $2`,
+            [actorUserId, targetUserId]
+        );
+
+        if (permCheck.rows.length === 0 || permCheck.rows[0].permission_level !== 'primary') {
+            return res.status(403).json({
+                success: false,
+                error: 'Only a Primary Guardian can add contacts to a protectee list'
+            });
+        }
+
+        const insertResult = await db.query(
+            `INSERT INTO public.trusted_contacts (user_id, name, phone_number, relationship, created_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             RETURNING *`,
+            [targetUserId, name.trim(), phoneNumber.trim(), relationship?.trim() || null]
+        );
+
+        await db.query(
+            `INSERT INTO public.audit_logs (actor_user_id, target_user_id, action, details, created_at)
+             VALUES ($1, $2, 'ADD_TRUSTED_CONTACT', $3, NOW())`,
+            [
+                actorUserId,
+                targetUserId,
+                JSON.stringify({ contactId: insertResult.rows[0].id, name: name.trim() })
+            ]
+        );
+
+        return res.status(201).json({
+            success: true,
+            contact: insertResult.rows[0]
+        });
+    } catch (err) {
+        console.error('Error adding protectee contact:', err);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to add protectee contact'
+        });
+    }
+});
+
+// 3. Delete a contact from a Protectee's trusted contacts list (Primary Guardian only)
+app.delete('/api/guardians/contacts/:contactId', async (req, res) => {
+    const contactId = parseInt(req.params.contactId, 10);
+    const actorUserId = req.body?.actorUserId
+        ? parseInt(req.body.actorUserId, 10)
+        : req.query?.actorUserId
+            ? parseInt(req.query.actorUserId, 10)
+            : NaN;
+
+    if (Number.isNaN(contactId) || Number.isNaN(actorUserId)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Valid contactId and actorUserId are required'
+        });
+    }
+
+    try {
+        const contactResult = await db.query(
+            `SELECT id, user_id, name, phone_number, relationship
+             FROM public.trusted_contacts
+             WHERE id = $1`,
+            [contactId]
+        );
+
+        if (contactResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Trusted contact not found'
+            });
+        }
+
+        const existingContact = contactResult.rows[0];
+        const targetUserId = existingContact.user_id;
+
+        if (actorUserId !== targetUserId) {
+            const permCheck = await db.query(
+                `SELECT permission_level
+                 FROM public.account_guardians
+                 WHERE guardian_user_id = $1 AND dependent_user_id = $2`,
+                [actorUserId, targetUserId]
+            );
+
+            if (permCheck.rows.length === 0 || permCheck.rows[0].permission_level !== 'primary') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Only a Primary Guardian can delete contacts from a protectee list'
+                });
+            }
+        }
+
+        await db.query(
+            `DELETE FROM public.trusted_contacts
+             WHERE id = $1`,
+            [contactId]
+        );
+
+        await db.query(
+            `INSERT INTO public.audit_logs (actor_user_id, target_user_id, action, details, created_at)
+             VALUES ($1, $2, 'DELETE_TRUSTED_CONTACT', $3, NOW())`,
+            [
+                actorUserId,
+                targetUserId,
+                JSON.stringify({
+                    contactId: existingContact.id,
+                    name: existingContact.name,
+                    phoneNumber: existingContact.phone_number
+                })
+            ]
+        );
+
+        return res.json({
+            success: true,
+            deletedContactId: contactId,
+            targetUserId
+        });
+    } catch (err) {
+        console.error('Error deleting trusted contact:', err);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to delete trusted contact'
+        });
+    }
+});
+
+
 app.post('/api/trusted-contacts/bulk', async (req, res) => {
     const { userId, contacts } = req.body;
 
