@@ -1005,37 +1005,35 @@ app.get('/api/user/profile', async (req, res) => {
 // ----------------------------------------------------
 // Guardian & Trusted Contacts Management
 // ----------------------------------------------------
-app.get('/api/guardians/my-guardians/:dependentUserId', async (req, res) => {
-    const { dependentUserId } = req.params;
-    const parsedUserId = parseInt(dependentUserId, 10);
-
-    if (isNaN(parsedUserId)) {
-        return res.status(400).json({ success: false, error: 'Invalid user ID format' });
+// Example: GET /api/guardians/my-protectees/:guardianUserId
+app.get('/api/guardians/my-protectees/:guardianUserId', async (req, res) => {
+    const guardianUserId = parseInt(req.params.guardianUserId, 10);
+    if (!guardianUserId || isNaN(guardianUserId)) {
+        return res.status(400).json({ success: false, error: 'Valid guardianUserId is required.' });
     }
 
     try {
-        const query = `
-            SELECT
-                ag.id AS relationship_id,
-                u.id AS guardian_user_id,
-                u.user_name AS name,
-                u.owner_phone AS phone_number,
-                ag.permission_level AS relationship,
-                ag.created_at AS created_at
-            FROM account_guardians ag
-            JOIN users u ON ag.guardian_user_id = u.id
-            WHERE ag.dependent_user_id = $1 AND ag.is_active = true
-        `;
+        const result = await pool.query(
+            `SELECT ag.id AS relationship_id,
+                    ag.dependent_user_id,
+                    u.user_name AS name,
+                    u.owner_phone AS phone_number,
+                    ag.permission_level AS relationship,
+                    ag.created_at
+             FROM account_guardians ag
+             JOIN users u ON ag.dependent_user_id = u.id
+             WHERE ag.guardian_user_id = $1
+             ORDER BY u.user_name ASC, ag.id ASC`,
+            [guardianUserId]
+        );
 
-        const result = await pool.query(query, [parsedUserId]);
-
-        return res.status(200).json({
+        return res.json({
             success: true,
-            guardians: result.rows || []
+            protectees: result.rows
         });
-    } catch (error) {
-        console.error('Error fetching assigned guardians:', error);
-        return res.status(500).json({ success: false, error: 'Server error fetching guardians.' });
+    } catch (err) {
+        console.error('Error fetching protectees for guardian:', err);
+        return res.status(500).json({ success: false, error: 'Server error fetching protectees.' });
     }
 });
 
