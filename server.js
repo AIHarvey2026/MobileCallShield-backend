@@ -1830,19 +1830,16 @@ app.get('/api/voicemail/stream', async (req, res) => {
 // ----------------------------------------------------
 app.get('/api/call-logs/:userId', async (req, res) => {
     const { userId } = req.params;
-    const { startDate, endDate, range, userIds, actorUserId, timeZone = 'America/Chicago' } = req.query;
+    const { userIds, range, startDate, endDate, timeZone = 'America/Chicago' } = req.query;
 
     const primaryUserId = parseInt(userId, 10);
-    const effectiveActorId = parseInt(actorUserId || req.user?.id || primaryUserId, 10);
-
     if (!primaryUserId || isNaN(primaryUserId)) {
         return res.status(400).json({ success: false, error: 'Valid userId is required.' });
     }
 
     let targetUserIds = [primaryUserId];
-    const rawUserIds = Array.isArray(userIds) ? userIds.join(',') : userIds;
-    if (typeof rawUserIds === 'string' && rawUserIds.trim().length > 0) {
-        const parsed = rawUserIds
+    if (typeof userIds === 'string' && userIds.trim().length > 0) {
+        const parsed = userIds
             .split(',')
             .map((id) => parseInt(id.trim(), 10))
             .filter((id) => !isNaN(id));
@@ -1851,19 +1848,7 @@ app.get('/api/call-logs/:userId', async (req, res) => {
         }
     }
 
-    const dbClient = await pool.connect();
     try {
-        for (const targetId of targetUserIds) {
-            const actor = await resolveActorRole(dbClient, targetId, effectiveActorId);
-            const isAuthorized = actor.role === 'protectee' || actor.isGuardian;
-            if (!isAuthorized) {
-                return res.status(403).json({
-                    success: false,
-                    error: `Unauthorized to view call logs for user ID ${targetId}.`
-                });
-            }
-        }
-
         let query = `
             SELECT cl.call_sid,
                    cl.user_id,
@@ -1883,7 +1868,7 @@ app.get('/api/call-logs/:userId', async (req, res) => {
             WHERE cl.user_id = ANY($1::int[])
         `;
 
-        const queryParams = [targetUserIds];
+        const params = [targetUserIds];
         let paramIndex = 2;
 
         if (range === 'today') {
@@ -1891,7 +1876,7 @@ app.get('/api/call-logs/:userId', async (req, res) => {
                 AND cl.created_at >= ((NOW() AT TIME ZONE $${paramIndex})::date::timestamp AT TIME ZONE $${paramIndex})
                 AND cl.created_at < (((NOW() AT TIME ZONE $${paramIndex})::date + INTERVAL '1 day')::timestamp AT TIME ZONE $${paramIndex})
             `;
-            queryParams.push(timeZone);
+            params.push(timeZone);
             paramIndex += 1;
         } else if (range === '7d') {
             query += ` AND cl.created_at >= NOW() - INTERVAL '7 days'`;
@@ -1902,20 +1887,17 @@ app.get('/api/call-logs/:userId', async (req, res) => {
                 AND cl.created_at >= ($${paramIndex}::date::timestamp AT TIME ZONE $${paramIndex + 2})
                 AND cl.created_at < (($${paramIndex + 1}::date + INTERVAL '1 day')::timestamp AT TIME ZONE $${paramIndex + 2})
             `;
-            queryParams.push(startDate, endDate, timeZone);
+            params.push(startDate, endDate, timeZone);
             paramIndex += 3;
         }
 
         query += ` ORDER BY cl.created_at DESC LIMIT 100`;
 
-        const result = await dbClient.query(query, queryParams);
-        console.log(`[CallLogs] primary=${primaryUserId} actor=${effectiveActorId} targets=${JSON.stringify(targetUserIds)} range=${range || 'all'} rows=${result.rowCount}`);
-        res.json({ success: true, callLogs: result.rows });
+        const result = await pool.query(query, params);
+        return res.json({ success: true, callLogs: result.rows });
     } catch (err) {
         console.error('Error fetching call logs:', err);
-        res.status(500).json({ success: false, error: 'Server error fetching call logs.' });
-    } finally {
-        dbClient.release();
+        return res.status(500).json({ success: false, error: 'Server error fetching call logs.' });
     }
 });
 
