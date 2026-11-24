@@ -1840,17 +1840,11 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     }
 
     let targetUserIds = [primaryUserId];
-    if (typeof userIds === 'string' && userIds.trim().length > 0) {
-        const parsed = userIds
+    const rawUserIds = Array.isArray(userIds) ? userIds.join(',') : userIds;
+    if (typeof rawUserIds === 'string' && rawUserIds.trim().length > 0) {
+        const parsed = rawUserIds
             .split(',')
             .map((id) => parseInt(id.trim(), 10))
-            .filter((id) => !isNaN(id));
-        if (parsed.length > 0) {
-            targetUserIds = [...new Set(parsed)];
-        }
-    } else if (Array.isArray(userIds) && userIds.length > 0) {
-        const parsed = userIds
-            .map((id) => parseInt(id, 10))
             .filter((id) => !isNaN(id));
         if (parsed.length > 0) {
             targetUserIds = [...new Set(parsed)];
@@ -1861,7 +1855,8 @@ app.get('/api/call-logs/:userId', async (req, res) => {
     try {
         for (const targetId of targetUserIds) {
             const actor = await resolveActorRole(dbClient, targetId, effectiveActorId);
-            if (actor.role === 'unauthorized') {
+            const isAuthorized = actor.role === 'protectee' || actor.isGuardian;
+            if (!isAuthorized) {
                 return res.status(403).json({
                     success: false,
                     error: `Unauthorized to view call logs for user ID ${targetId}.`
@@ -1914,6 +1909,7 @@ app.get('/api/call-logs/:userId', async (req, res) => {
         query += ` ORDER BY cl.created_at DESC LIMIT 100`;
 
         const result = await dbClient.query(query, queryParams);
+        console.log(`[CallLogs] primary=${primaryUserId} actor=${effectiveActorId} targets=${JSON.stringify(targetUserIds)} range=${range || 'all'} rows=${result.rowCount}`);
         res.json({ success: true, callLogs: result.rows });
     } catch (err) {
         console.error('Error fetching call logs:', err);
