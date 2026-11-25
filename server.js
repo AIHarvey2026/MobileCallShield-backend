@@ -1117,7 +1117,7 @@ app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
 
     try {
         if (actorUserId !== targetUserId) {
-            const linkCheck = await db.query(
+            const linkCheck = await pool.query(
                 `SELECT permission_level
                  FROM public.account_guardians
                  WHERE guardian_user_id = $1 AND dependent_user_id = $2`,
@@ -1132,14 +1132,14 @@ app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
             }
         }
 
-        // Adjust column names (e.g. full_name, name, message_name) to match your users table
-        const ownerResult = await db.query(
+        const ownerResult = await pool.query(
             `SELECT
                 id,
                 email,
+                user_name,
+                message_name,
                 COALESCE(
-                    NULLIF(TRIM(full_name), ''),
-                    NULLIF(TRIM(name), ''),
+                    NULLIF(TRIM(user_name), ''),
                     NULLIF(TRIM(message_name), ''),
                     email
                 ) AS display_name
@@ -1149,7 +1149,7 @@ app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
             [targetUserId]
         );
 
-        const contactsResult = await db.query(
+        const contactsResult = await pool.query(
             `SELECT id, user_id, name, phone_number, relationship, created_at
              FROM public.trusted_contacts
              WHERE user_id = $1
@@ -1165,7 +1165,7 @@ app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
             targetUserId,
             isProtecteeList: actorUserId !== targetUserId,
             ownerName,
-            owner: ownerRow,
+            owner: ownerRow ? { ...ownerRow, name: ownerName } : null,
             contacts: contactsResult.rows
         });
     } catch (err) {
@@ -1189,7 +1189,7 @@ app.post('/api/guardians/contacts', async (req, res) => {
     }
 
     try {
-        const permCheck = await db.query(
+        const permCheck = await pool.query(
             `SELECT permission_level
              FROM public.account_guardians
              WHERE guardian_user_id = $1 AND dependent_user_id = $2`,
@@ -1203,14 +1203,14 @@ app.post('/api/guardians/contacts', async (req, res) => {
             });
         }
 
-        const insertResult = await db.query(
+        const insertResult = await pool.query(
             `INSERT INTO public.trusted_contacts (user_id, name, phone_number, relationship, created_at)
              VALUES ($1, $2, $3, $4, NOW())
              RETURNING *`,
             [targetUserId, name.trim(), phoneNumber.trim(), relationship?.trim() || null]
         );
 
-        await db.query(
+        await pool.query(
             `INSERT INTO public.audit_logs (actor_user_id, target_user_id, action, details, created_at)
              VALUES ($1, $2, 'ADD_TRUSTED_CONTACT', $3, NOW())`,
             [
@@ -1250,7 +1250,7 @@ app.delete('/api/guardians/contacts/:contactId', async (req, res) => {
     }
 
     try {
-        const contactResult = await db.query(
+        const contactResult = await pool.query(
             `SELECT id, user_id, name, phone_number, relationship
              FROM public.trusted_contacts
              WHERE id = $1`,
@@ -1268,7 +1268,7 @@ app.delete('/api/guardians/contacts/:contactId', async (req, res) => {
         const targetUserId = existingContact.user_id;
 
         if (actorUserId !== targetUserId) {
-            const permCheck = await db.query(
+            const permCheck = await pool.query(
                 `SELECT permission_level
                  FROM public.account_guardians
                  WHERE guardian_user_id = $1 AND dependent_user_id = $2`,
@@ -1283,13 +1283,13 @@ app.delete('/api/guardians/contacts/:contactId', async (req, res) => {
             }
         }
 
-        await db.query(
+        await pool.query(
             `DELETE FROM public.trusted_contacts
              WHERE id = $1`,
             [contactId]
         );
 
-        await db.query(
+        await pool.query(
             `INSERT INTO public.audit_logs (actor_user_id, target_user_id, action, details, created_at)
              VALUES ($1, $2, 'DELETE_TRUSTED_CONTACT', $3, NOW())`,
             [
