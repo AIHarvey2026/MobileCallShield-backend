@@ -1422,48 +1422,8 @@ app.delete('/api/contacts/delete', async (req, res) => {
         dbClient.release();
     }
 });
-```[cite: 3]
-
-### 2. Remove the Contact Immediately on Swipe in `ContactComparisonView.swift`
-Right now, `deleteProtectedContacts` only refreshes from the server *if* the HTTP request succeeds—if Render is spinning up or returns an error, nothing visibly happens. Updating `syncManager.syncedContacts` right away (and re-syncing afterward) makes the swipe feel instant and reliable:
-
-```swift
-    private func deleteProtectedContacts(at offsets: IndexSet) {
-        let targets = offsets.map { protectedList[$0] }
-        let targetKeys = Set(targets.map { phoneKey($0.phoneNumber) })
-
-        syncManager.syncedContacts.removeAll { contact in
-            targetKeys.contains(phoneKey(contact.phoneNumber))
-        }
-
-        for contact in targets {
-            guard targetUserId != 0,
-                  let url = URL(string: "\(baseURL)/api/contacts/delete") else { continue }
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "DELETE"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: [
-                "userId": targetUserId,
-                "actorUserId": loggedInUserId,
-                "phoneNumber": contact.phoneNumber
-            ])
-
-            URLSession.shared.dataTask(with: request) { _, response, error in
-                DispatchQueue.main.async {
-                    if let error = error {
-                        print("[ERROR] Delete contact network error: \(error.localizedDescription)")
-                    }
-                    if let http = response as? HTTPURLResponse {
-                        print("[DEBUG] Delete contact status: \(http.statusCode)")
-                    }
-                    self.triggerSync(for: self.targetUserId, force: true)
-                }
-            }.resume()
-        }
-    }
-
-
+// 2. Update Primary Guardian Designation
+app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
 // 2. Update Primary Guardian Designation
 app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
     const { contactId } = req.params;
