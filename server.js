@@ -565,35 +565,46 @@ app.get('/api/app-version/latest', async (req, res) => {
 // ----------------------------------------------------
 // User Settings & Profile
 // ----------------------------------------------------
-app.post('/api/user/update-message-name', async (req, res) => {
-    const { userId, rawMessageName } = req.body;
-
-    if (!userId) {
-        return res.status(400).json({ success: false, error: 'User ID is required.' });
-    }
-
+app.get('/api/user/profile', async (req, res) => {
     try {
-        const sanitizedName = sanitizeAndValidateMessageName(rawMessageName);
+        const userId = req.query.userId;
+        console.log(`[Backend Profile] Incoming request for userId: ${userId}`);
 
         const result = await pool.query(
-            'UPDATE users SET message_name = $1 WHERE id = $2 RETURNING id, message_name',
-            [sanitizedName, userId]
+            `SELECT id, email, user_name, message_name, carrier_name, twilio_screening_number, subscription_status
+             FROM users
+             WHERE id = $1`,
+            [userId]
         );
 
         if (result.rows.length === 0) {
-            return res.status(404).json({ success: false, error: 'User not found.' });
+            console.log(`[Backend Profile] User not found for id: ${userId}`);
+            return res.status(404).json({ error: 'User not found' });
         }
 
+        const user = result.rows[0];
+        const displayName =
+            user.user_name?.trim() ||
+            user.message_name?.trim() ||
+            null;
+
+        console.log(`[Backend Profile] Found user record:`, user);
+
         res.json({
-            success: true,
-            message: sanitizedName
-                ? `Greeting name updated to "${sanitizedName}".`
-                : 'Greeting name cleared. Calls will use the default privacy message.',
-            messageName: sanitizedName
+            user: {
+                id: user.id,
+                name: displayName,
+                user_name: user.user_name,
+                message_name: user.message_name,
+                email: user.email,
+                carrier_name: user.carrier_name,
+                assignedTwilioNumber: user.twilio_screening_number,
+                subscriptionStatus: user.subscription_status
+            }
         });
     } catch (err) {
-        console.error('Error updating message name:', err);
-        res.status(400).json({ success: false, error: err.message || 'Failed to update message name.' });
+        console.error('[Backend Profile] Error fetching user profile:', err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
