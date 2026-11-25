@@ -975,7 +975,9 @@ app.get('/api/user/profile', async (req, res) => {
         console.log(`[Backend Profile] Incoming request for userId: ${userId}`);
 
         const result = await pool.query(
-            'SELECT id, email, carrier_name, twilio_screening_number, subscription_status FROM users WHERE id = $1',
+            `SELECT id, email, user_name, message_name, carrier_name, twilio_screening_number, subscription_status
+             FROM users
+             WHERE id = $1`,
             [userId]
         );
 
@@ -985,11 +987,19 @@ app.get('/api/user/profile', async (req, res) => {
         }
 
         const user = result.rows[0];
+        const displayName =
+            user.user_name?.trim() ||
+            user.message_name?.trim() ||
+            null;
+
         console.log(`[Backend Profile] Found user record:`, user);
 
         res.json({
             user: {
                 id: user.id,
+                name: displayName,
+                user_name: user.user_name,
+                message_name: user.message_name,
                 email: user.email,
                 carrier_name: user.carrier_name,
                 assignedTwilioNumber: user.twilio_screening_number,
