@@ -1132,6 +1132,23 @@ app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
             }
         }
 
+        // Adjust column names (e.g. full_name, name, message_name) to match your users table
+        const ownerResult = await db.query(
+            `SELECT
+                id,
+                email,
+                COALESCE(
+                    NULLIF(TRIM(full_name), ''),
+                    NULLIF(TRIM(name), ''),
+                    NULLIF(TRIM(message_name), ''),
+                    email
+                ) AS display_name
+             FROM public.users
+             WHERE id = $1
+             LIMIT 1`,
+            [targetUserId]
+        );
+
         const contactsResult = await db.query(
             `SELECT id, user_id, name, phone_number, relationship, created_at
              FROM public.trusted_contacts
@@ -1140,10 +1157,15 @@ app.get('/api/trusted-contacts/:targetUserId', async (req, res) => {
             [targetUserId]
         );
 
+        const ownerRow = ownerResult.rows[0] || null;
+        const ownerName = ownerRow?.display_name || '';
+
         return res.json({
             success: true,
             targetUserId,
             isProtecteeList: actorUserId !== targetUserId,
+            ownerName,
+            owner: ownerRow,
             contacts: contactsResult.rows
         });
     } catch (err) {
