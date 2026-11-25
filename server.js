@@ -1911,12 +1911,13 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
 
     let ownerPhone = null;
     let passcode = '1234';
+    let screeningNumber = toE164(To) || To || process.env.TWILIO_PHONE_NUMBER || TWILIO_NUMBER;
     let dbClient = null;
 
     try {
         dbClient = await pool.connect();
         const callQuery = await dbClient.query(
-            `SELECT c.user_id, u.owner_phone, u.passcode
+            `SELECT c.user_id, c.to_number, u.owner_phone, u.passcode, u.twilio_screening_number
              FROM call_logs c
              JOIN users u ON c.user_id = u.id
              WHERE c.call_sid = $1 LIMIT 1`,
@@ -1926,9 +1927,13 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
         if (callQuery.rows.length > 0) {
             ownerPhone = callQuery.rows[0].owner_phone;
             passcode = callQuery.rows[0].passcode || '1234';
+            screeningNumber =
+                callQuery.rows[0].twilio_screening_number ||
+                callQuery.rows[0].to_number ||
+                screeningNumber;
         } else if (To) {
             const userFallback = await dbClient.query(
-                `SELECT u.id, u.owner_phone, u.passcode
+                `SELECT u.id, u.owner_phone, u.passcode, u.twilio_screening_number
                  FROM users u
                  JOIN twilio_numbers tn ON u.id = tn.user_id
                  WHERE tn.phone_number = $1 LIMIT 1`,
@@ -1937,11 +1942,17 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             if (userFallback.rows.length > 0) {
                 ownerPhone = userFallback.rows[0].owner_phone;
                 passcode = userFallback.rows[0].passcode || '1234';
+                screeningNumber =
+                    userFallback.rows[0].twilio_screening_number ||
+                    To ||
+                    screeningNumber;
             }
         }
 
         const normalizedPasscode = String(passcode).trim().toLowerCase();
-        const isMatch = (digitsInput === normalizedPasscode) || (speechInput.includes(normalizedPasscode));
+        const isMatch =
+            digitsInput === normalizedPasscode ||
+            speechInput.includes(normalizedPasscode);
 
         if (digitsInput === '9' || speechInput.includes('doctor') || speechInput.includes('medical')) {
             if (CallSid) {
@@ -1952,7 +1963,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             }
             twiml.say('Connecting your urgent medical call.');
             if (ownerPhone) {
-                twiml.dial(ownerPhone);
+                twiml.dial({ callerId: screeningNumber }, ownerPhone);
             } else {
                 twiml.say('Owner phone not configured.');
             }
@@ -1969,7 +1980,7 @@ app.post('/api/twilio/verify-passcode', async (req, res) => {
             }
             twiml.say('Passcode accepted. Connecting your call.');
             if (ownerPhone) {
-                twiml.dial(ownerPhone);
+                twiml.dial({ callerId: screeningNumber }, ownerPhone);
             } else {
                 twiml.say('Owner phone not configured.');
             }
