@@ -1348,6 +1348,122 @@ app.post('/api/trusted-contacts/bulk', async (req, res) => {
     }
 });
 
+app.delete('/api/contacts/delete', async (req, res) => {
+    const targetUserId = parseInt(req.body?.userId, 10);
+    const actorUserId = req.body?.actorUserId ? parseInt(req.body.actorUserId, 10) : targetUserId;
+    const rawPhone = String(req.body?.phoneNumber || '').trim();
+    const digitsOnly = rawPhone.replace(/\D/g, '');
+    const tenDigits = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
+
+    if (!targetUserId || Number.isNaN(targetUserId) || !tenDigits) {
+        return res.status(400).json({
+            success: false,
+            error: 'Valid userId and phoneNumber are required.'
+        });
+    }
+
+    const dbClient = await pool.connect();
+    try {
+        if (actorUserId !== targetUserId) {
+            const linkCheck = await dbClient.query(
+                `SELECT permission_level
+                 FROM account_guardians
+                 WHERE guardian_user_id = $1
+                   AND dependent_user_id = $2
+                   AND is_active = true`,
+                [actorUserId, targetUserId]
+            );
+
+            if (linkCheck.rows.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Not authorized to modify this protectee contact list.'
+                });
+            }
+        }
+
+        const deleted = await dbClient.query(
+            `DELETE FROM trusted_contacts
+             WHERE user_id = $1
+               AND RIGHT(REGEXP_REPLACE(COALESCE(phone_number, ''), '\\D', '', 'g'), 10) = $2
+             RETURNING id, name, phone_number`,
+            [targetUserId, tenDigits]
+        );
+
+        if (deleted.rowCount === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Trusted contact not found.'
+            });
+        }
+
+        await logAuditEvent(dbClient, {
+            dependentUserId: targetUserId,
+            performedByUserId: actorUserId,
+            role: actorUserId === targetUserId ? 'protectee' : 'guardian',
+            actionType: 'DELETE_TRUSTED_CONTACT',
+            changes: {
+                deletedContacts: deleted.rows
+            }
+        });
+
+        return res.json({
+            success: true,
+            deletedCount: deleted.rowCount,
+            deleted: deleted.rows
+        });
+    } catch (err) {
+        console.error('Error deleting trusted contact:', err);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to delete trusted contact.'
+        });
+    } finally {
+        dbClient.release();
+    }
+});
+```[cite: 3]
+
+### 2. Remove the Contact Immediately on Swipe in `ContactComparisonView.swift`
+Right now, `deleteProtectedContacts` only refreshes from the server *if* the HTTP request succeeds—if Render is spinning up or returns an error, nothing visibly happens. Updating `syncManager.syncedContacts` right away (and re-syncing afterward) makes the swipe feel instant and reliable:
+
+```swift
+    private func deleteProtectedContacts(at offsets: IndexSet) {
+        let targets = offsets.map { protectedList[$0] }
+        let targetKeys = Set(targets.map { phoneKey($0.phoneNumber) })
+
+        syncManager.syncedContacts.removeAll { contact in
+            targetKeys.contains(phoneKey(contact.phoneNumber))
+        }
+
+        for contact in targets {
+            guard targetUserId != 0,
+                  let url = URL(string: "\(baseURL)/api/contacts/delete") else { continue }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "userId": targetUserId,
+                "actorUserId": loggedInUserId,
+                "phoneNumber": contact.phoneNumber
+            ])
+
+            URLSession.shared.dataTask(with: request) { _, response, error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        print("[ERROR] Delete contact network error: \(error.localizedDescription)")
+                    }
+                    if let http = response as? HTTPURLResponse {
+                        print("[DEBUG] Delete contact status: \(http.statusCode)")
+                    }
+                    self.triggerSync(for: self.targetUserId, force: true)
+                }
+            }.resume()
+        }
+    }
+
+
 // 2. Update Primary Guardian Designation
 app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
     const { contactId } = req.params;
