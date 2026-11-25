@@ -1424,8 +1424,6 @@ app.delete('/api/contacts/delete', async (req, res) => {
 });
 // 2. Update Primary Guardian Designation
 app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
-// 2. Update Primary Guardian Designation
-app.patch('/api/trusted-contacts/:contactId/primary', async (req, res) => {
     const { contactId } = req.params;
     const { userId, isPrimary, actorUserId } = req.body;
     const targetUserId = parseInt(userId, 10);
