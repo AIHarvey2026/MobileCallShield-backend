@@ -1788,7 +1788,12 @@ app.post('/api/twilio/voice', async (req, res) => {
     const dbClient = await pool.connect();
     try {
         const userQuery = await dbClient.query(
-            `SELECT u.id AS user_id, u.user_name, u.owner_phone, u.is_call_shield_enabled, u.message_name
+            `SELECT u.id AS user_id, 
+                    u.user_name, 
+                    u.owner_phone, 
+                    u.is_call_shield_enabled, 
+                    u.message_name,
+                    u.twilio_screening_number
              FROM users u
              JOIN twilio_numbers tn ON u.id = tn.user_id
              WHERE tn.phone_number = $1 OR tn.phone_number = $2
@@ -1804,6 +1809,7 @@ app.post('/api/twilio/voice', async (req, res) => {
         const user = userQuery.rows[0];
         const userId = user.user_id;
         const ownerLabel = user.message_name || user.user_name || 'the owner';
+        const screeningNumber = user.twilio_screening_number || normalizedTo || TWILIO_NUMBER;
 
         // LOOP PREVENTION: Strict 10-Second Window for Rapid Carrier Bounces ONLY
         const rapidBounceCheck = await dbClient.query(
@@ -1895,37 +1901,79 @@ app.post('/api/twilio/voice', async (req, res) => {
         );
         const isTrusted = contactCheck.rows.length > 0;
 
-        // 2. IF TRUSTED CONTACT: Take a direct message without looping back to owner_phone
+        // 2. IF TRUSTED CONTACT: First call dials owner_phone; second call within 5 mins goes to voicemail
         if (isTrusted) {
-            twiml.say(`You are verified as a trusted contact. ${ownerLabel} is unavailable to answer right now, so please leave a message after the tone.`);
-            twiml.record({
-                action: '/api/twilio/handle-voicemail',
-                method: 'POST',
-                maxLength: 60,
-                transcribe: true,
-                transcribeCallback: '/api/twilio/voicemail-transcription'
-            });
-        } else {
-            // 3. UNTRUSTED / UNKNOWN CALLER: Interactive passcode gather
-            const gather = twiml.gather({
-                input: 'speech dtmf',
-                action: '/api/twilio/verify-passcode',
-                method: 'POST',
-                timeout: 5,
-                speechTimeout: 'auto'
-            });
+            const priorTrustedCall = await dbClient.query(
+                `SELECT id FROM call_logs
+                 WHERE user_id = $1
+                   AND (from_number = $2 OR from_number = $3)
+                   AND call_status = 'trusted_bridged'
+                   AND created_at > NOW() - INTERVAL '5 minutes'
+                 LIMIT 1`,
+                [userId, From, normalizedFrom]
+            );
 
-            gather.say(`This is Mobile Call Shield protecting ${ownerLabel}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
+            if (priorTrustedCall.rows.length > 0) {
+                // Second Call within 5 minutes -> Voicemail
+                await dbClient.query(
+                    `UPDATE call_logs SET call_status = 'voicemail' WHERE call_sid = $1`,
+                    [CallSid]
+                );
+                twiml.say(`${ownerLabel} is unavailable right now. Please leave a voicemail after the tone.`);
+                twiml.record({
+                    action: '/api/twilio/handle-voicemail',
+                    method: 'POST',
+                    maxLength: 60,
+                    transcribe: true,
+                    transcribeCallback: '/api/twilio/voicemail-transcription'
+                });
+            } else {
+                // First Call -> Dial owner_phone directly
+                await dbClient.query(
+                    `UPDATE call_logs SET call_status = 'trusted_bridged' WHERE call_sid = $1`,
+                    [CallSid]
+                );
+                if (user.owner_phone) {
+                    const dial = twiml.dial({
+                        callerId: normalizedFrom || screeningNumber,
+                        timeout: 25
+                    });
+                    dial.number(user.owner_phone);
+                } else {
+                    twiml.say('Owner phone is not configured. Please leave a message after the tone.');
+                    twiml.record({
+                        action: '/api/twilio/handle-voicemail',
+                        method: 'POST',
+                        maxLength: 60,
+                        transcribe: true,
+                        transcribeCallback: '/api/twilio/voicemail-transcription'
+                    });
+                }
+            }
 
-            twiml.say('No passcode received. Please leave a message after the tone.');
-            twiml.record({
-                action: '/api/twilio/handle-voicemail',
-                method: 'POST',
-                maxLength: 60,
-                transcribe: true,
-                transcribeCallback: '/api/twilio/voicemail-transcription'
-            });
+            res.type('text/xml');
+            return res.send(twiml.toString());
         }
+
+        // 3. UNTRUSTED / UNKNOWN CALLER: Interactive passcode gather
+        const gather = twiml.gather({
+            input: 'speech dtmf',
+            action: '/api/twilio/verify-passcode',
+            method: 'POST',
+            timeout: 5,
+            speechTimeout: 'auto'
+        });
+
+        gather.say(`This is Mobile Call Shield protecting ${ownerLabel}. Please state the passcode or enter it on your keypad. If you are a doctor or medical provider, please press 9 or say doctor.`);
+
+        twiml.say('No passcode received. Please leave a message after the tone.');
+        twiml.record({
+            action: '/api/twilio/handle-voicemail',
+            method: 'POST',
+            maxLength: 60,
+            transcribe: true,
+            transcribeCallback: '/api/twilio/voicemail-transcription'
+        });
 
         res.type('text/xml');
         res.send(twiml.toString());
@@ -1940,6 +1988,7 @@ app.post('/api/twilio/voice', async (req, res) => {
     }
 });
 
+// Gets to Twilio and the call is verified
 app.post('/api/twilio/verify-passcode', async (req, res) => {
     const { CallSid, Digits, SpeechResult, To } = req.body;
     const isTimeoutFallback = req.query.fallback === 'voicemail';
